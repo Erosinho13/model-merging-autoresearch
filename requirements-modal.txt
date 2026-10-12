@@ -1,0 +1,18 @@
+# NLP runtime pins retained from conda_environment.yaml where possible.
+transformers==4.40.2
+peft==0.3.0
+accelerate==0.26.1
+datasets==2.16.1
+huggingface-hub==0.20.2
+tokenizers==0.19.1
+numpy==1.26.3
+pyarrow==14.0.2
+pyarrow-hotfix==0.6
+scipy==1.11.4
+pandas==2.1.4
+tqdm==4.66.1
+openai-clip==1.0.1
+sentencepiece==0.1.97
+safetensors==0.4.1
+# Original sklearn 0.24.0 predates Python 3.10 wheels; only used for splitting.
+scikit-learn==1.4.2

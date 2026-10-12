@@ -6,6 +6,7 @@ from copy import deepcopy
 import numpy as np
 from utils import *
 from task_merger import get_merge_handler
+from configs.nlp_benchmark import select_benchmark
 
 # Set TOKENIZERS_PARALLELISM to true
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -32,7 +33,7 @@ def run_BIG_function():
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
-    raw_config = get_config_from_name(CONFIG_NAME, device=device)
+    raw_config = select_benchmark(get_config_from_name(CONFIG_NAME, device=device))
     print(raw_config['task_merge_config'])
     config = prepare_experiment_config(raw_config)
     dataset_names = np.array([i['name'] for i in raw_config['dataset']])
@@ -80,9 +81,6 @@ def run_BIG_function():
     finetuned_llama3_acc = {
         'snli': 92.49796416938111,
         'mnli': 90.30820173204279,
-        'sick': 91.58173664900122,
-        'qnli' : 94.48512585812358,
-        'rte' : 89.85507246376812,
         'scitail': 96.51928504233303,
     }
     
