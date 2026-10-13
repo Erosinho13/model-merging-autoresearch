@@ -1,6 +1,7 @@
 """Inspect research tools with an explicit public repository boundary."""
 import ast
 import asyncio
+import base64
 import hashlib
 import json
 import math
@@ -11,10 +12,11 @@ from time import monotonic
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
 from inspect_ai.solver import Generate, TaskState, generate, solver, use_tools
-from inspect_ai.tool import tool
+from inspect_ai.tool import tool, ToolResult
+from inspect_ai.model import ContentImage, ContentText
 from inspect_ai.model import GenerateConfig
 from inspect_ai.util import sample_limits
-from research_agent.repository import public_repository, reference_files
+from research_agent.repository import public_repository, reference_files, reference_figures
 from private_eval.scoring import load_reference
 
 ROOT = Path(__file__).resolve().parent
@@ -143,6 +145,28 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
         return execute
 
     @tool
+    def read_figure():
+        async def execute(name: str = "") -> ToolResult:
+            """List reference figures or return one image for visual analysis.
+
+            Args:
+                name: Exact reference-relative image path; empty lists available images.
+                    Resolve Markdown image links relative to the paper's folder.
+            """
+            if not name:
+                return json.dumps(sorted(figures))
+            path = figures.get(name)
+            if (path is None or path.is_symlink() or not path.is_file()
+                    or not path.resolve().is_relative_to((ROOT / "references").resolve())):
+                return "Invalid reference figure"
+            mime = {".png": "image/png", ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg", ".webp": "image/webp"}[path.suffix.lower()]
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            return [ContentText(text=f"Reference figure: {name}"),
+                    ContentImage(image=f"data:{mime};base64,{encoded}")]
+        return execute
+
+    @tool
     def write_candidate():
         async def execute(code: str) -> str:
             """Replace only candidate.py; check syntax and the fixed signature.
@@ -268,6 +292,7 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
 
     repository = public_repository()
     papers = reference_files()
+    figures = reference_figures()
     
     for name, content in repository.items():
         path = folder / "repository" / name
@@ -301,6 +326,7 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
             write_candidate(),
             evaluate_candidate(),
             submit_candidate(),
+            read_figure(),
         ]),
         generate(tool_calls="loop"),
     ]

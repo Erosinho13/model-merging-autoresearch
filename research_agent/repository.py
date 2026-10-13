@@ -41,3 +41,15 @@ def reference_files():
             continue
         papers[path.relative_to(root).as_posix()] = path.read_text()
     return papers
+
+
+def reference_figures():
+    """Allow only local raster images beneath the supplied reference folder."""
+    root = ROOT / "research_agent/references"
+    return {
+        path.relative_to(root).as_posix(): path
+        for path in root.rglob("*")
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        and path.is_file() and not path.is_symlink()
+        and path.resolve().is_relative_to(root.resolve())
+    }

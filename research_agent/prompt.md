@@ -148,8 +148,8 @@ You have access to the following through the provided tools:
   task_merger.py, utils.py, baseline_configs.py and merging_types.py.
 - baseline_results.md, the measured test-score table with named baselines and the
   anonymous reference. The merging interface is documented in this prompt.
-- Reference papers in Markdown, including captions. Figure images cannot be
-  viewed through the reading tools.
+- Reference papers in Markdown, including captions, and their local figure images
+  through read_figure.
 - candidate.py, the only editable source file, and the evaluation and budget tools.
 
 baseline_configs.py contains the public methods' settings. In the current three-adapter
@@ -168,6 +168,10 @@ candidate is allowed; evaluating it consumes an ordinary evaluation attempt.
 
 - read_repository: list or read public files and the current candidate.
 - read_reference: list or read supplied paper Markdown.
+- read_figure(name=""): list available paper images; supply an exact listed path
+  to view a figure. Markdown image links are relative to the paper's folder:
+  for paper/notes.md linking figure.jpeg, use paper/figure.jpeg.
+  Viewing images consumes model input tokens; select figures relevant to your research.
 - write_candidate: replace candidate.py and check syntax and the merge signature.
 - get_budget: report token usage, remaining evaluation attempts and remaining
   wall-clock time in seconds, using the same timer that enforces the run limit.
