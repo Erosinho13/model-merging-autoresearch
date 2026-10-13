@@ -1,4 +1,4 @@
-"""Modal entry point for candidate validation and operator-only final tests."""
+"""Modal entry point for candidate validation and visible test feedback."""
 import hashlib
 import json
 import uuid
@@ -6,6 +6,10 @@ from pathlib import Path
 
 import modal
 from modal_app import image, cache, results, check_checkpoints_ready, app as baseline_app
+import os
+import sys
+from private_eval.scoring import load_reference, relative_scores
+from research_agent.repository import public_repository
 
 ROOT = Path(__file__).resolve().parent
 app = modal.App("lora-research-agent")
@@ -13,7 +17,9 @@ io_volume = modal.Volume.from_name("lora-candidate-io", create_if_missing=True)
 grader_image = image.add_local_dir(ROOT, "/workspace/research_agent",
                                    ignore=["references/**", "**/__pycache__/**"])
 worker_image = (modal.Image.debian_slim(python_version="3.10")
-                .pip_install("torch==2.2.2", "numpy==1.26.4", "safetensors==0.4.1")
+                .pip_install("torch==2.2.2", "numpy==1.26.4", "safetensors==0.4.1",
+                             "transformers==4.40.2", "peft==0.3.0", "accelerate==0.26.1",
+                             "huggingface-hub==0.20.2")
                 .add_local_file(ROOT / "worker.py", "/worker.py"))
 
 
@@ -21,8 +27,7 @@ worker_image = (modal.Image.debian_slim(python_version="3.10")
               timeout=3600, max_containers=1, scaledown_window=2,
               volumes={"/cache": cache, "/results": results, "/candidate-io": io_volume})
 def evaluate_candidate(source: str, split: str = "val"):
-    import os
-    import sys
+    # Worker-only tensor dependencies; keep local Modal app setup lightweight.
     from safetensors.torch import load_file, save_file
     if split not in {"val", "test"}:
         raise ValueError("Invalid split")
@@ -31,7 +36,9 @@ def evaluate_candidate(source: str, split: str = "val"):
     os.chdir("/workspace")
     sys.path.insert(0, "/workspace")
     os.environ.update(HF_HUB_OFFLINE="1", HF_DATASETS_OFFLINE="1")
+    # Import the trusted evaluator after setting worker paths and offline flags.
     from research_agent.bridge import evaluate
+    reference = load_reference(split)
     experiment = uuid.uuid4().hex
     output = Path("/results/agent", experiment)
     output.mkdir(parents=True)
@@ -40,35 +47,72 @@ def evaluate_candidate(source: str, split: str = "val"):
                 "sha256": hashlib.sha256(source.encode()).hexdigest()}
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
-    def execute(code, base, vectors):
+    def execute(code, model, vectors, lora_adapters):
         folder = Path("/candidate-io", experiment)
         folder.mkdir(parents=True)
         (folder / "candidate.py").write_text(code)
-        tensors = {f"base/{k}": v.contiguous() for k, v in base.items()}
-        tensors.update({f"task{i}/{k}": v.detach().contiguous()
-                        for i, vector in enumerate(vectors) for k, v in vector.items()})
+        public = folder / "repository"
+        public.mkdir()
+        for name, content in public_repository().items():
+            (public / name).write_text(content)
+        description = {"config": model.config.to_dict(),
+                       "adapter_config": model.peft_config["default"].to_dict()}
+        description["adapter_config"].pop("base_model_name_or_path", None)
+        description["adapter_config"].pop("revision", None)
+        (folder / "model.json").write_text(json.dumps(description, default=lambda v: sorted(v) if isinstance(v, set) else v.value))
+        state = {}
+        seen = set()
+        for name, value in model.state_dict().items():
+            value = value.detach().cpu().contiguous()
+            if ".score." in name:
+                value = value.new_zeros(value.shape)
+            if value.data_ptr() in seen:
+                value = value.clone()
+            seen.add(value.data_ptr())
+            state[name] = value
+        save_file(state, str(folder / "model.safetensors"))
+        del state
+        tensors = {f"task{i}/{k}": v.detach().contiguous()
+                   for i, vector in enumerate(vectors) for k, v in vector.items()}
+        import torch
+        for i, adapter in enumerate(lora_adapters):
+            for key, factors in adapter.items():
+                tensors[f"lora{i}/A/{key}"] = factors["A"].contiguous()
+                tensors[f"lora{i}/B/{key}"] = factors["B"].contiguous()
+                tensors[f"lora{i}/scaling/{key}"] = torch.tensor(factors["scaling"], dtype=torch.float64)
         save_file(tensors, str(folder / "inputs.safetensors"))
         del tensors
         io_volume.commit()
         sandbox = modal.Sandbox.create(
             "python", "/worker.py", "/data", app=app, image=worker_image,
-            cpu=8, memory=65536, timeout=600, block_network=True,
+            cpu=8, memory=98304, timeout=600, block_network=True,
             volumes={"/data": io_volume.with_mount_options(sub_path=f"/{experiment}")})
         try:
             sandbox.wait()
-            if sandbox.returncode != 0:
-                raise RuntimeError(f"Candidate sandbox exited with code {sandbox.returncode}")
+            returncode = sandbox.returncode
         finally:
             sandbox.terminate(wait=True)
         io_volume.reload()
+        if returncode != 0:
+            detail = folder / "error.json"
+            message = ""
+            if detail.is_file() and not detail.is_symlink():
+                with detail.open() as stream:
+                    message = stream.read(2500)
+            raise RuntimeError(f"Candidate sandbox exited with code {returncode}: {message}")
         weights = folder / "output.safetensors"
         if weights.is_symlink() or not weights.is_file():
             raise ValueError("Missing regular candidate output file")
+        maximum_bytes = sum(v.numel() * 8 for v in vectors[0].values()) + 1024**2
+        if weights.stat().st_size > maximum_bytes:
+            raise ValueError("Candidate output exceeds the permitted tensor size")
         # Tensor-only interchange: never deserialize candidate-controlled pickle.
         return load_file(str(weights))
 
     try:
         report = evaluate(source, str(output), execute, split)
+        report["scores"] = relative_scores(report, reference)
+        report["score_type"] = "reference_relative_percent" if reference else "raw_accuracy_percent"
         report.update(metadata)
         (output / "result.json").write_text(json.dumps(report, indent=2))
         return report
@@ -80,7 +124,9 @@ def evaluate_candidate(source: str, split: str = "val"):
 
 
 @app.local_entrypoint()
-def main(candidate: str = "research_agent/average.py", split: str = "val"):
+def main(candidate: str = "", split: str = "val"):
+    if not candidate:
+        raise ValueError("Provide --candidate path/to/candidate.py")
     if split not in {"val", "test"}:
         raise ValueError("Invalid split")
     source = Path(candidate).read_text()

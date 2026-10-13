@@ -13,6 +13,8 @@ from copy import deepcopy
 from pathlib import Path
 
 from configs.nlp_benchmark import TASKS, ADAPTERS, select_benchmark
+from baseline_configs import BASELINES
+import dataset.configs as defaults
 
 METHODS = {
     "average": "llama8B_r16_tv",
@@ -35,6 +37,8 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
     if method not in EVALUATIONS:
         raise ValueError(f"Unknown evaluation: {method}")
     config = select_benchmark(importlib.import_module(f"configs.{METHODS.get(method, 'llama8B_r16_tv')}").config)
+    if method in BASELINES:
+        config["task_merge_config"] = deepcopy(BASELINES[method])
     # Empty-string cache_dir overrides HF_HOME; None uses the same default cache
     # as snapshot_download in the CPU preparation step.
     config["model"]["cachedir"] = None
@@ -63,6 +67,7 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
 
 def load_unmerged(selection, raw):
     """Load one backbone and recover the same task heads used for merging."""
+    # Defer ML imports: fixed_config is also used before worker offline setup.
     import torch
     from transformers import AutoModelForSequenceClassification
     from peft import PeftModel
@@ -93,6 +98,7 @@ def load_unmerged(selection, raw):
 def run(method, output_dir, seed=420, split="test", scale=None, top_k=None, dare_pruning_coeffs=None):
     started = monotonic()
     progress(f"Starting {method}, seed {seed}; importing ML libraries")
+    # Defer ML imports: fixed_config is also used before worker offline setup.
     import torch
     from utils import set_seed
 
@@ -122,10 +128,11 @@ def run(method, output_dir, seed=420, split="test", scale=None, top_k=None, dare
 
 
 def load_merged(method, raw):
+    # Defer ML imports: fixed_config is also used before worker offline setup.
     import torch
     from ft_handlers import LoRAHandler
-    from task_merger import get_merge_handler
-    from utils import prepare_llama
+    from private_eval.knots_merger import get_merge_handler
+    from private_eval.model_utils import prepare_llama
 
     progress("Loading base model and three adapters on CPU")
     models = prepare_llama(raw["model"], "cpu")
@@ -164,14 +171,14 @@ def load_merged(method, raw):
 
 
 def evaluate_tasks(merged, heads, raw, report, method, output_dir, seed, started):
+    # Defer ML imports: fixed_config is also used before worker offline setup.
     import torch
-    from utils import evaluate_logits
+    from private_eval.model_utils import evaluate_logits
     for dataset in raw["dataset"]:
         task = dataset["name"]
         task_started = monotonic()
         progress(f"Preparing {task} {report['split']} loader (tokenization/cache lookup)")
         # Use original test loaders/preprocessing; avoid training-loader setup.
-        import dataset.configs as defaults
         data_config = deepcopy(getattr(defaults, task))
         data_config.update(dataset)
         loader = importlib.import_module(f"dataset.{task}").prepare_test_loaders(data_config)[report["split"]]

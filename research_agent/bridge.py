@@ -2,15 +2,16 @@
 import gc
 from pathlib import Path
 from time import monotonic
+import torch
+from ft_handlers import LoRAHandler
+from task_merger import TaskMerger
+from utils import set_seed
+from private_eval.model_utils import prepare_llama
+from eval_scripts.nli_fixed_test import fixed_config, evaluate_tasks, progress
+from configs.nlp_benchmark import TASKS
 
 
 def evaluate(source, output_dir, execute_candidate, split="val"):
-    import torch
-    from ft_handlers import LoRAHandler
-    from task_merger import TaskMerger
-    from utils import prepare_llama, set_seed
-    from eval_scripts.nli_fixed_test import fixed_config, evaluate_tasks, progress
-    from configs.nlp_benchmark import TASKS
 
     started = monotonic()
     set_seed(420)
@@ -26,15 +27,19 @@ def evaluate(source, output_dir, execute_candidate, split="val"):
         heads[task] = matches[0]
     reference = LoRAHandler(models["new"]).get_ft_parameters()
     parameters = [LoRAHandler(model).get_ft_parameters() for model in models["bases"]]
+    lora_adapters = [LoRAHandler(model).get_lora_factors() for model in models["bases"]]
     helper = TaskMerger(models["bases"], models["new"], LoRAHandler, device="cpu")
     vectors = helper.get_task_directions(reference, parameters)
+    for factors, vector in zip(lora_adapters, vectors):
+        if set(factors) != set(vector):
+            raise ValueError("LoRA factor keys must match task-vector keys")
     model = models["new"]
     state = model.state_dict()
     base = {key: state[key].detach().cpu().clone() for key in reference}
     del helper, parameters, reference, models
     gc.collect()
     progress("Running candidate in isolated CPU sandbox")
-    merged = execute_candidate(source, base, vectors)
+    merged = execute_candidate(source, model, vectors, lora_adapters)
     if set(merged) != set(base):
         raise ValueError("Candidate must return exactly the supplied weight keys")
     with torch.no_grad():
@@ -46,7 +51,7 @@ def evaluate(source, output_dir, execute_candidate, split="val"):
             if not torch.isfinite(value).all():
                 raise ValueError(f"Invalid shape or nonfinite weights: {key}")
             state[key].copy_(value)
-    del base, vectors, merged, state
+    del base, vectors, merged, state, lora_adapters
     gc.collect()
     model.config.pad_token_id = 128001
     model.config.use_cache = False

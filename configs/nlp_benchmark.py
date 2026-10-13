@@ -1,4 +1,5 @@
 """Shared task selection for the reduced NLP benchmark."""
+from copy import deepcopy
 
 TASKS = ("snli", "mnli", "scitail")
 ADAPTERS = tuple(f"hoffman-lab/KnOTS-Llama3_8B_lora_R16_{task}" for task in TASKS)
@@ -11,7 +12,6 @@ DATASETS = (
 
 def select_benchmark(config):
     """Select matching datasets and adapters before any data/model loading."""
-    from copy import deepcopy
 
     selected = deepcopy(config)
     selected["dataset"] = deepcopy(list(DATASETS))

@@ -8,7 +8,7 @@ below from this repository's root directory.
 If this environment is not authenticated yet, run `modal token new`.
 
 ```bash
-python -m modal run modal_app.py
+python -m modal run modal_diagnostics.py
 ```
 
 This builds a Linux environment, uploads the repository source, imports the
@@ -28,7 +28,7 @@ dashboard. Do not put the token in code or chat. The token must have access to
 `meta-llama/Meta-Llama-3-8B`, including acceptance of its access conditions.
 
 ```bash
-python -m modal run modal_app.py --prepare
+python -m modal run modal_diagnostics.py --prepare
 ```
 
 This command uses **no GPU**. It loads the three raw datasets, checks the gated
@@ -47,9 +47,7 @@ Successful preparation writes `/preparation.json` in `lora-merging-results`.
 The report includes package versions and immutable adapter revisions. It does
 not yet verify classification heads or establish baseline accuracy.
 
-## Evaluation is temporarily disabled
-
-The new fixed-baseline runner is separate from the legacy `--module` command:
+## Baseline evaluation
 
 ```bash
 python -m modal run modal_app.py --download
@@ -79,20 +77,13 @@ original singular-value threshold; alignment runs on GPU before evaluation.
 These three-task fixed-setting runs are not an exact reproduction of the paper's
 six-task, validation-tuned table. Results are saved under
 `/fixed-test` in `lora-merging-results`. The new runner requests A100-40GB for
-unquantized float32 inference; memory fit and numerical results remain unverified.
+unquantized float32 inference. KnOTS full-size SVD memory and runtime still need verification.
 
-The `--module` entry point now raises a local error **before allocating a GPU**.
-The evaluation script now selects three tasks but still selects KnOTS-TIES and
-requires `heads.pt`. We must configure the method and measure memory before enabling
-GPU evaluation. The dormant remote runner retains its original A100 resource
-declaration; it is not invoked by the preparation command.
-
-HF downloads
-persist in `lora-merging-hf-cache`; evaluation CSVs persist in
+HF downloads persist in `lora-merging-hf-cache`; evaluation JSON reports persist in
 `lora-merging-results`. For example, download outputs with:
 
 ```bash
-modal volume get lora-merging-results /csvs_new ./modal-results
+modal volume get lora-merging-results /fixed-test ./modal-results
 ```
 
 Only explicitly listed source directories and files are uploaded. Local secrets,

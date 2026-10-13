@@ -1,0 +1,7 @@
+{
+  "test": {
+    "reference_accuracy_percent": {"snli": 90.82, "mnli": 88.21, "scitail": 94.17},
+    "provenance": "Operator-supplied raw-results table; accuracies rounded to two decimals. Confirmed test split."
+  },
+  "val": null
+}
