@@ -28,6 +28,7 @@ image = (
     .pip_install("torch==2.2.2", "torchvision==0.17.2")
     .pip_install_from_requirements(str(ROOT / "requirements-modal.txt"))
     .env({"HF_HOME": "/cache/huggingface", "PYTHONPATH": "/workspace",
+          "LORA_REPOSITORY_ROOT": "/workspace",
           "TOKENIZERS_PARALLELISM": "false"})
 )
 # Explicit source allowlist: never upload credentials, Git metadata or local data.
@@ -39,6 +40,8 @@ for directory in ("configs", "dataset", "eval_scripts", "private_eval"):
 for filename in (
     "utils.py", "ft_handlers.py", "masking_ops.py", "merging_functions.py",
     "task_merger.py", "baseline_configs.py", "merging_types.py",
+    # modal_runner imports this module during remote function hydration.
+    "modal_app.py", "requirements-modal.txt",
 ):
     image = image.add_local_file(ROOT / filename, f"/workspace/{filename}")
 

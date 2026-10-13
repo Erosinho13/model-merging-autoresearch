@@ -1,7 +1,8 @@
 """Construct an explicit public source view; never expose the operator tree."""
 from pathlib import Path
+import os
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(os.environ.get("LORA_REPOSITORY_ROOT", str(Path(__file__).resolve().parent.parent)))
 
 
 # These Python files are exposed in their entirety. No class/function extraction.
@@ -14,7 +15,7 @@ PRIVATE_PATHS = (
     "private_eval/", "eval_scripts/", "dataset/", "configs/",
     "modal_app.py", "modal_diagnostics.py", "research_agent/task.py",
     "research_agent/bridge.py", "research_agent/modal_runner.py",
-    "research_agent/worker.py", "tests/",
+    "research_agent/worker.py", "research_agent/inputs_cache.py", "tests/",
     "README.md", "MODAL.md", "requirements-modal.txt",
     "conda_environment.yaml", "research_agent/repository.py",
     "research_agent/prompt.md", "research_agent/examples/",

@@ -9,11 +9,14 @@ from utils import set_seed
 from private_eval.model_utils import prepare_llama
 from eval_scripts.nli_fixed_test import fixed_config, evaluate_tasks, progress
 from configs.nlp_benchmark import TASKS
+import json
+from safetensors.torch import load_file
+from research_agent.worker import load_model
+from research_agent.inputs_cache import read_manifest
 
 
-def evaluate(source, output_dir, execute_candidate, split="val"):
-
-    started = monotonic()
+def prepare_inputs():
+    """Construct the released model inputs once, on the trusted CPU worker."""
     set_seed(420)
     raw = fixed_config("average")
     progress("Loading baseline models for candidate evaluation")
@@ -34,24 +37,41 @@ def evaluate(source, output_dir, execute_candidate, split="val"):
         if set(factors) != set(vector):
             raise ValueError("LoRA factor keys must match task-vector keys")
     model = models["new"]
-    state = model.state_dict()
-    base = {key: state[key].detach().cpu().clone() for key in reference}
     del helper, parameters, reference, models
     gc.collect()
-    progress("Running candidate in isolated CPU sandbox")
-    merged = execute_candidate(source, model, vectors, lora_adapters)
-    if set(merged) != set(base):
+    return model, heads, raw, vectors, lora_adapters
+
+
+def evaluate(source, output_dir, execute_candidate, split="val", inputs_dir=None):
+    """Load the cached base model and private heads; keep the original task grader."""
+    if inputs_dir is None:
+        raise ValueError("Prepare the fixed-input cache before GPU evaluation")
+    started = monotonic()
+    set_seed(420)
+    folder = Path(inputs_dir)
+    manifest = read_manifest(folder)
+    if manifest is None:
+        raise ValueError("Fixed-input cache is incomplete")
+    raw = json.loads((folder / "evaluation.json").read_text())
+    heads = load_file(str(folder / "heads.safetensors"))
+    progress("Loading cached base model; task adapters are not reloaded")
+    model = load_model(folder / "public")
+    state = model.state_dict()
+    shapes = manifest["weight_shapes"]
+    progress("Running candidate in a fresh sandbox using cached read-only inputs")
+    merged = execute_candidate(source, shapes)
+    if set(merged) != set(shapes):
         raise ValueError("Candidate must return exactly the supplied weight keys")
     with torch.no_grad():
-        for key, original in base.items():
+        for key, shape in shapes.items():
             value = merged[key]
-            if value.shape != original.shape or not value.is_floating_point():
+            if list(value.shape) != shape or not value.is_floating_point():
                 raise ValueError(f"Invalid shape or dtype: {key}")
-            value = value.to(original.dtype)
+            value = value.to(state[key].dtype)
             if not torch.isfinite(value).all():
                 raise ValueError(f"Invalid shape or nonfinite weights: {key}")
             state[key].copy_(value)
-    del base, vectors, merged, state, lora_adapters
+    del merged, state
     gc.collect()
     model.config.pad_token_id = 128001
     model.config.use_cache = False

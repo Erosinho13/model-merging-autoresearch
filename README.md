@@ -54,10 +54,39 @@ python -m modal run -m research_agent.modal_runner::main \
   --candidate research_agent/examples/average.py --split val
 ```
 
+To verify cache reuse, run averaging followed by Task Arithmetic sequentially:
+
+```bash
+python -m modal run -m research_agent.modal_runner::main --cache-check --split test
+```
+
+The second preparation must report `cache_hit=True`, with the same input-cache key
+and sandbox image ID; otherwise the check stops before its GPU evaluation.
+Separate reports, candidate snapshots and timing summaries are saved under
+`cache-checks/<run-id>/`. Compare preparation time separately from evaluation
+time: both candidates still load the cached model and evaluate the full datasets.
+If the input cache already exists, both preparations can be cache hits.
+Task Arithmetic uses the current coefficient in `baseline_configs.py` (0.5).
+On test, expected raw accuracies from the measured baselines are approximately:
+
+| Candidate | SNLI | MNLI | SciTail |
+|---|---:|---:|---:|
+| Averaging | 90.92 | 81.90 | 93.98 |
+| Task Arithmetic | 91.28 | 89.17 | 91.67 |
+
 Compare the returned raw validation accuracies with the averaging baseline on
-the same split. This check incurs Modal compute charges. The GPU remains allocated
-while candidate code runs in the CPU sandbox; transferring and reconstructing the
-model also adds overhead.
+the same split. This check incurs Modal compute charges. Local orchestration builds
+the sandbox image, then a CPU worker caches fixed inputs before requesting a GPU. Later
+attempts reuse those files and image layers. The GPU remains allocated while each
+fresh sandbox reconstructs the model and runs the candidate.
+
+Fixed inputs are stored in `lora-research-inputs`. The cache key includes checkpoint
+revisions and the source/runtime settings used to prepare them. Changed inputs
+invalidate the cache automatically; an incomplete cache is rebuilt. Candidate
+sandboxes receive only the public input subdirectory through a read-only mount.
+Classification heads and evaluation settings stay in the private cache directory.
+Library installation is cached in Modal image layers; changes to the worker script
+rebuild its file layer while unchanged dependency layers can be reused.
 
 Set your provider API credentials locally and use an API model identifier supported
 by your provider. A Codex model label is not necessarily an API model identifier;
@@ -85,6 +114,7 @@ feedback also includes remaining time, tokens and attempts.
 | Messages | 60 | `Task(message_limit=60)` in `research_agent/task.py` |
 | Evaluation attempts, shared across val/test | 3 | `evaluate_candidate` tool in `research_agent/task.py` |
 | Candidate sandbox execution | 10 minutes | `timeout=600` in `research_agent/modal_runner.py` |
+| CPU input preparation | 1 hour | `prepare_inputs` in `research_agent/modal_runner.py` |
 | Each remote evaluation | 1 hour | `timeout=3600` in `research_agent/modal_runner.py` |
 
 The agent runtime starts when Inspect begins the sample. Individual Modal timeouts
@@ -111,7 +141,8 @@ accessible to the viewer.
 | Same run directory, after submission or fallback | `submission.py`, `algorithm.md` and `submission.json`; if no evaluation succeeded, only a submission report explaining that no valid candidate exists |
 | `agent-logs/` | Inspect transcripts, usage, tool activity and errors |
 | Modal volume `lora-merging-results`, under `/agent/<experiment-id>/` | Candidate snapshot, `metadata.json`, `result.json` or `error.json` |
-| Modal volume `lora-candidate-io`, under `/<experiment-id>/` | Sandbox model inputs and exported tensors; these large files are currently retained |
+| Modal volume `lora-candidate-io`, under `/<experiment-id>/` | Per-attempt candidate code, public source and exported tensors; retained for now |
+| Modal volume `lora-research-inputs`, under `/<cache-key>/` | Reusable fixed model inputs under `public/`; private classifier heads and evaluation configuration outside that subdirectory |
 
 Inspect the numbered local result files as evaluations finish. Their
 `experiment_id` links successful local reports to the corresponding remote results.
@@ -149,6 +180,7 @@ mean, without reference calibration.
 | `task_merger.py`, `merging_functions.py`, `masking_ops.py`, `ft_handlers.py` | Merging implementations and parameter handling |
 | `utils.py` | Public merging dispatch and seed utilities |
 | `research_agent/` | Preliminary Inspect tools, candidate execution and references |
+| `research_agent/inputs_cache.py` | Trusted fixed-input serialization, cache validation and invalidation |
 
 Baseline JSON reports are saved in the Modal volume `lora-merging-results`.
 

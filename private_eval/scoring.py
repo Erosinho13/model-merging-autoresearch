@@ -1,10 +1,12 @@
 """Trusted reference-relative scoring; no reference identity in feedback."""
 import json
 import math
+import os
 from pathlib import Path
 
 TASKS = ("snli", "mnli", "scitail")
-REFERENCES = Path(__file__).with_name("reference_scores.json")
+ROOT = Path(os.environ.get("LORA_REPOSITORY_ROOT", str(Path(__file__).resolve().parent.parent)))
+REFERENCES = ROOT / "private_eval" / "reference_scores.json"
 
 
 def load_reference(split):

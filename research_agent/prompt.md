@@ -190,6 +190,11 @@ network access. The trusted evaluator loads the exported weights and performs
 GPU inference outside that sandbox. No general shell or independent execution
 tool is available to the agent.
 
+Fixed inputs and installed-library image layers are reused across attempts.
+Each candidate runs in a fresh sandbox with the fixed inputs mounted read-only
+and a separate writable output folder. Cache preparation happens on CPU before
+GPU allocation; first-time setup may take longer and counts toward the run timer.
+
 The candidate sandbox has eight CPUs, 96 GiB RAM and a ten-minute timeout.
 Installed libraries include PyTorch 2.2.2, Transformers 4.40.2, PEFT 0.3.0,
 Accelerate 0.26.1, NumPy 1.26.4 and safetensors 0.4.1. Candidate code has no GPU.
@@ -229,9 +234,27 @@ hyperparameters reproducible. Stop experimenting in time to submit valid work.
 
 Submit the implemented merge function and a Markdown explanation of the algorithm
 and its experimental evidence. Every evaluation requires a nonempty explanation
-of at most 20 KB. Include equations or pseudocode, hyperparameters, relationship
-to prior work, rationale and limitations. The runner saves each explanation with
-its exact code snapshot as algorithm_<attempt>.md, including failed remote attempts.
+of at most 20 KB. The runner saves each explanation with its exact code snapshot
+as algorithm_<attempt>.md, including failed remote attempts.
+
+The final write-up must address these four points, in a structure of your choice:
+
+- **What the method does:** describe the actual merging procedure using prose,
+  pseudocode or equations. Explain important implementation choices, assumptions
+  and hyperparameters so another researcher can understand and reproduce it.
+- **Why it might help:** explain the proposed mechanism and the limitation it
+  addresses. Distinguish hypotheses from established facts.
+- **What the experiments show:** cite supporting experiment IDs, report observed
+  results with their splits, and discuss regressions and limitations. If evidence
+  is insufficient for a claim, state that explicitly.
+- **What it contributes:** explain how the method differs from prior work,
+  identifying reused components and the proposed new contribution.
+
+These are content requirements, not mandatory section headings. Mathematical
+claims and formal proofs are optional; include them when relevant to your method.
+Each pre-evaluation explanation must describe the current procedure, rationale
+and proposed contribution, and any evidence available so far. Do not invent results
+for an experiment that has not completed. Update the final write-up with its outcomes.
 
 Restore your chosen successfully evaluated source using write_candidate if needed,
 then call submit_candidate. Evaluation must have succeeded for that exact source

@@ -225,6 +225,7 @@ __marimo__/
 # Research run artifacts (candidate snapshots may contain generated code).
 agent-runs/
 agent-logs/
+cache-checks/
 
 research_agent/references/**
 !research_agent/references/convert_paper.sh

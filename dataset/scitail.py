@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
-import datasets
 from  .huggingface_datasets import task_ids, task_to_keys
-from transformers import AutoTokenizer
+from .loading import load_dataset, load_tokenizer
+from transformers.data.data_collator import pad_without_fast_tokenizer_warning
 
 
 ROOT = "" # Path to the root directory of the dataset
@@ -22,11 +22,11 @@ class SCITAIL:
         else:
             padding_side = "right"
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side=padding_side)
+        self.tokenizer = load_tokenizer(model_name_or_path, padding_side=padding_side)
         if getattr(self.tokenizer, "pad_token_id") is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         
-        dataset = datasets.load_dataset(task_ids[task], data_format, cache_dir=ROOT)
+        dataset = load_dataset(task_ids[task], data_format, cache_dir=ROOT)
         sentence1_key, sentence2_key = task_to_keys[task]
 
         def tokenize_function(examples):
@@ -55,7 +55,8 @@ class SCITAIL:
             self.val_loader = DataLoader(self.tokenized_datasets["validation"], shuffle=False, collate_fn=self.collate_fn, batch_size=batch_size, num_workers = num_workers)
 
     def collate_fn(self, examples):
-            return self.tokenizer.pad(examples, padding="longest", return_tensors="pt")
+            # Examples are already tokenized and cached; only dynamic padding remains.
+            return pad_without_fast_tokenizer_warning(self.tokenizer, examples, padding="longest", return_tensors="pt")
     
 
 

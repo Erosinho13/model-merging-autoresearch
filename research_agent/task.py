@@ -200,9 +200,11 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
                 try:
                     def remote():
                         # Initialize the Modal app only when an evaluation is requested.
-                        from research_agent.modal_runner import app, evaluate_candidate as evaluator
+                        from research_agent.modal_runner import app, prepare_evaluation, evaluate_candidate as evaluator
                         with app.run():
-                            return evaluator.remote(snapshot, split)
+                            prepared = prepare_evaluation()
+                            return evaluator.remote(snapshot, split,
+                                                    prepared["cache_key"], prepared["sandbox_image_id"])
                     report = await asyncio.to_thread(remote)
                     if set(report["scores"]) != {"snli", "mnli", "scitail", "avg"} or not all(math.isfinite(v) for v in report["scores"].values()):
                         raise ValueError("Evaluator returned a nonfinite score")

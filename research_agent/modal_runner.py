@@ -1,136 +1,204 @@
-"""Modal entry point for candidate validation and visible test feedback."""
+"""CPU cache preparation followed by protected Modal GPU evaluation."""
 import hashlib
 import json
-import uuid
+import math
+import os
 from pathlib import Path
+import sys
+from time import monotonic
+import uuid
 
 import modal
 from modal_app import image, cache, results, check_checkpoints_ready, app as baseline_app
-import os
-import sys
 from private_eval.scoring import load_reference, relative_scores
 from research_agent.repository import public_repository
 
-ROOT = Path(__file__).resolve().parent
-app = modal.App("lora-research-agent")
-io_volume = modal.Volume.from_name("lora-candidate-io", create_if_missing=True)
-grader_image = image.add_local_dir(ROOT, "/workspace/research_agent",
-                                   ignore=["references/**", "**/__pycache__/**"])
-worker_image = (modal.Image.debian_slim(python_version="3.10")
-                .pip_install("torch==2.2.2", "numpy==1.26.4", "safetensors==0.4.1",
-                             "transformers==4.40.2", "peft==0.3.0", "accelerate==0.26.1",
-                             "huggingface-hub==0.20.2")
-                .add_local_file(ROOT / "worker.py", "/worker.py"))
+# Modal may import this module from /root; uploaded runtime assets live in /workspace.
+ROOT = Path(__file__).resolve().parent if modal.is_local() else Path('/workspace/research_agent')
+app = modal.App('lora-research-agent')
+io_volume = modal.Volume.from_name('lora-candidate-io', create_if_missing=True)
+inputs_volume = modal.Volume.from_name('lora-research-inputs', create_if_missing=True)
+grader_image = image.add_local_dir(ROOT, '/workspace/research_agent',
+                                   ignore=['references/**', '**/__pycache__/**'])
+worker_image = (modal.Image.debian_slim(python_version='3.10')
+                .pip_install('torch==2.2.2', 'numpy==1.26.4', 'safetensors==0.4.1',
+                             'transformers==4.40.2', 'peft==0.3.0', 'accelerate==0.26.1',
+                             'huggingface-hub==0.20.2')
+                .add_local_file(ROOT / 'worker.py', '/worker.py', copy=True))
 
 
-@app.function(image=grader_image, gpu="A100-40GB", cpu=8, memory=196608,
+@app.function(image=grader_image, cpu=8, memory=196608, timeout=3600,
+              max_containers=1, scaledown_window=2,
+              volumes={'/cache': cache, '/fixed-inputs': inputs_volume})
+def prepare_inputs():
+    """Cache fixed tensors on CPU before allocating a GPU."""
+    started = monotonic()
+    os.chdir('/workspace')
+    sys.path.insert(0, '/workspace')
+    os.environ.update(HF_HUB_OFFLINE='1', HF_DATASETS_OFFLINE='1')
+    # ML imports follow the worker's offline/path setup.
+    from research_agent.bridge import prepare_inputs as prepare
+    from research_agent.inputs_cache import cache_key, ensure_inputs
+    from eval_scripts.nli_fixed_test import progress
+    cache.reload()
+    inputs_volume.reload()
+    ready = Path('/cache/checkpoints-ready.json')
+    if not ready.exists():
+        raise RuntimeError('Run baseline --download first')
+    key = cache_key(json.loads(ready.read_text()), ROOT.parent)
+    folder, hit = ensure_inputs('/fixed-inputs', key, prepare, progress)
+    progress('Committing fixed-input cache before GPU allocation')
+    inputs_volume.commit()
+    return {'cache_key': key, 'cache_hit': hit, 'preparation_seconds': monotonic() - started}
+
+
+@app.function(image=grader_image, gpu='A100-40GB', cpu=8, memory=196608,
               timeout=3600, max_containers=1, scaledown_window=2,
-              volumes={"/cache": cache, "/results": results, "/candidate-io": io_volume})
-def evaluate_candidate(source: str, split: str = "val"):
-    # Worker-only tensor dependencies; keep local Modal app setup lightweight.
-    from safetensors.torch import load_file, save_file
-    if split not in {"val", "test"}:
-        raise ValueError("Invalid split")
-    if not Path("/cache/checkpoints-ready.json").exists():
-        raise RuntimeError("Run baseline --download first")
-    os.chdir("/workspace")
-    sys.path.insert(0, "/workspace")
-    os.environ.update(HF_HUB_OFFLINE="1", HF_DATASETS_OFFLINE="1")
-    # Import the trusted evaluator after setting worker paths and offline flags.
+              volumes={'/cache': cache, '/results': results, '/candidate-io': io_volume,
+                       '/fixed-inputs': inputs_volume.with_mount_options(read_only=True)})
+def evaluate_candidate(source: str, split: str = 'val', cache_key: str = '', sandbox_image_id: str = ''):
+    # Worker-only imports follow offline/path initialization.
+    os.chdir('/workspace')
+    sys.path.insert(0, '/workspace')
+    os.environ.update(HF_HUB_OFFLINE='1', HF_DATASETS_OFFLINE='1')
+    from safetensors.torch import load_file
     from research_agent.bridge import evaluate
+    from research_agent.inputs_cache import cache_folder, read_manifest
+    from eval_scripts.nli_fixed_test import progress
     reference = load_reference(split)
+    folder = cache_folder('/fixed-inputs', cache_key)
+    inputs_volume.reload()
+    if read_manifest(folder) is None or not sandbox_image_id:
+        raise RuntimeError('Prepare the fixed inputs and sandbox image before evaluation')
     experiment = uuid.uuid4().hex
-    output = Path("/results/agent", experiment)
+    output = Path('/results/agent', experiment)
     output.mkdir(parents=True)
-    (output / "candidate.py").write_text(source)
-    metadata = {"experiment_id": experiment, "split": split,
-                "sha256": hashlib.sha256(source.encode()).hexdigest()}
-    (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    (output / 'candidate.py').write_text(source)
+    metadata = {'experiment_id': experiment, 'split': split, 'input_cache_key': cache_key,
+                'sandbox_image_id': sandbox_image_id,
+                'sha256': hashlib.sha256(source.encode()).hexdigest()}
+    (output / 'metadata.json').write_text(json.dumps(metadata, indent=2))
 
-    def execute(code, model, vectors, lora_adapters):
-        folder = Path("/candidate-io", experiment)
-        folder.mkdir(parents=True)
-        (folder / "candidate.py").write_text(code)
-        public = folder / "repository"
+    def execute(code, shapes):
+        progress(f'Preparing candidate files; experiment {experiment}')
+        attempt = Path('/candidate-io', experiment)
+        attempt.mkdir(parents=True)
+        (attempt / 'candidate.py').write_text(code)
+        public = attempt / 'repository'
         public.mkdir()
         for name, content in public_repository().items():
             (public / name).write_text(content)
-        description = {"config": model.config.to_dict(),
-                       "adapter_config": model.peft_config["default"].to_dict()}
-        description["adapter_config"].pop("base_model_name_or_path", None)
-        description["adapter_config"].pop("revision", None)
-        (folder / "model.json").write_text(json.dumps(description, default=lambda v: sorted(v) if isinstance(v, set) else v.value))
-        state = {}
-        seen = set()
-        for name, value in model.state_dict().items():
-            value = value.detach().cpu().contiguous()
-            if ".score." in name:
-                value = value.new_zeros(value.shape)
-            if value.data_ptr() in seen:
-                value = value.clone()
-            seen.add(value.data_ptr())
-            state[name] = value
-        save_file(state, str(folder / "model.safetensors"))
-        del state
-        tensors = {f"task{i}/{k}": v.detach().contiguous()
-                   for i, vector in enumerate(vectors) for k, v in vector.items()}
-        import torch
-        for i, adapter in enumerate(lora_adapters):
-            for key, factors in adapter.items():
-                tensors[f"lora{i}/A/{key}"] = factors["A"].contiguous()
-                tensors[f"lora{i}/B/{key}"] = factors["B"].contiguous()
-                tensors[f"lora{i}/scaling/{key}"] = torch.tensor(factors["scaling"], dtype=torch.float64)
-        save_file(tensors, str(folder / "inputs.safetensors"))
-        del tensors
+        # Only small per-attempt files are written; model inputs remain in their cache.
         io_volume.commit()
+        progress('Creating fresh sandbox with cached image and read-only model inputs')
         sandbox = modal.Sandbox.create(
-            "python", "/worker.py", "/data", app=app, image=worker_image,
+            'python', '/worker.py', '/data', '/inputs', app=app,
+            image=modal.Image.from_id(sandbox_image_id),
             cpu=8, memory=98304, timeout=600, block_network=True,
-            volumes={"/data": io_volume.with_mount_options(sub_path=f"/{experiment}")})
+            volumes={'/data': io_volume.with_mount_options(sub_path=f'/{experiment}'),
+                     '/inputs': inputs_volume.with_mount_options(
+                         sub_path=f'/{cache_key}/public', read_only=True)})
         try:
+            progress(f'Sandbox created: {sandbox.object_id}; waiting for candidate execution')
             sandbox.wait()
             returncode = sandbox.returncode
+            progress(f'Sandbox exited with code {returncode}; terminating sandbox')
         finally:
             sandbox.terminate(wait=True)
         io_volume.reload()
         if returncode != 0:
-            detail = folder / "error.json"
-            message = ""
+            detail = attempt / 'error.json'
+            message = ''
             if detail.is_file() and not detail.is_symlink():
                 with detail.open() as stream:
                     message = stream.read(2500)
-            raise RuntimeError(f"Candidate sandbox exited with code {returncode}: {message}")
-        weights = folder / "output.safetensors"
+            raise RuntimeError(f'Candidate sandbox exited with code {returncode}: {message}')
+        weights = attempt / 'output.safetensors'
         if weights.is_symlink() or not weights.is_file():
-            raise ValueError("Missing regular candidate output file")
-        maximum_bytes = sum(v.numel() * 8 for v in vectors[0].values()) + 1024**2
+            raise ValueError('Missing regular candidate output file')
+        maximum_bytes = sum(math.prod(shape) * 8 for shape in shapes.values()) + 1024**2
         if weights.stat().st_size > maximum_bytes:
-            raise ValueError("Candidate output exceeds the permitted tensor size")
+            raise ValueError('Candidate output exceeds the permitted tensor size')
         # Tensor-only interchange: never deserialize candidate-controlled pickle.
         return load_file(str(weights))
 
     try:
-        report = evaluate(source, str(output), execute, split)
-        report["scores"] = relative_scores(report, reference)
-        report["score_type"] = "reference_relative_percent" if reference else "raw_accuracy_percent"
+        report = evaluate(source, str(output), execute, split, inputs_dir=folder)
+        report['scores'] = relative_scores(report, reference)
+        report['score_type'] = 'reference_relative_percent' if reference else 'raw_accuracy_percent'
         report.update(metadata)
-        (output / "result.json").write_text(json.dumps(report, indent=2))
+        (output / 'result.json').write_text(json.dumps(report, indent=2))
         return report
     except Exception as error:
-        (output / "error.json").write_text(json.dumps({**metadata, "error": str(error)}))
+        (output / 'error.json').write_text(json.dumps({**metadata, 'error': str(error)}))
         raise
     finally:
         results.commit()
 
 
+def prepare_evaluation():
+    """Called locally inside a running app: build the image, then prepare CPU inputs."""
+    print('Preparing sandbox image before CPU input preparation and GPU allocation', flush=True)
+    started = monotonic()
+    with modal.enable_output():
+        built = worker_image.build(app=app)
+    image_seconds = monotonic() - started
+    prepared = prepare_inputs.remote()
+    return {**prepared, 'sandbox_image_id': built.object_id,
+            'image_build_seconds': image_seconds}
+
+
+def run_cache_check(split, output_dir):
+    """Sequential operator-only cache check with separate reports and timings."""
+    folder = Path(output_dir) / uuid.uuid4().hex
+    folder.mkdir(parents=True)
+    summaries = []
+    previous = None
+    for name in ('average', 'task_arithmetic'):
+        source = (ROOT / 'examples' / f'{name}.py').read_text()
+        (folder / f'{name}.py').write_text(source)
+        started = monotonic()
+        prepared = prepare_evaluation()
+        prep_seconds = monotonic() - started
+        if previous is not None:
+            if prepared['cache_key'] != previous['cache_key'] or not prepared['cache_hit']:
+                raise RuntimeError('Second preparation did not reuse the same input cache; GPU evaluation skipped')
+            if prepared['sandbox_image_id'] != previous['sandbox_image_id']:
+                raise RuntimeError('Sandbox image changed between runs; GPU evaluation skipped')
+        print(f"{name}: cache_hit={prepared['cache_hit']}, preparation={prep_seconds:.1f}s", flush=True)
+        evaluation_started = monotonic()
+        report = evaluate_candidate.remote(source, split, prepared['cache_key'], prepared['sandbox_image_id'])
+        summary = {'candidate': name, 'split': split, **prepared,
+                   'preparation_call_seconds': prep_seconds,
+                   'evaluation_call_seconds': monotonic() - evaluation_started,
+                   'total_seconds': monotonic() - started,
+                   'experiment_id': report['experiment_id'], 'scores': report['scores'],
+                   'raw_accuracy_percent': {task: result['accuracy_percent']
+                                            for task, result in report['tasks'].items()}}
+        (folder / f'{name}.json').write_text(json.dumps({'setup': summary, 'report': report}, indent=2))
+        summaries.append(summary)
+        (folder / 'summary.json').write_text(json.dumps(summaries, indent=2))
+        print(json.dumps(summary, indent=2), flush=True)
+        previous = prepared
+    print(f'Cache-check reports saved to {folder.resolve()}', flush=True)
+    return summaries
+
+
 @app.local_entrypoint()
-def main(candidate: str = "", split: str = "val"):
-    if not candidate:
-        raise ValueError("Provide --candidate path/to/candidate.py")
-    if split not in {"val", "test"}:
-        raise ValueError("Invalid split")
-    source = Path(candidate).read_text()
-    # CPU cache verification uses the existing baseline app.
+def main(candidate: str = '', split: str = 'val', cache_check: bool = False, output_dir: str = 'cache-checks'):
+    if not candidate and not cache_check:
+        raise ValueError('Provide --candidate path/to/candidate.py')
+    if candidate and cache_check:
+        raise ValueError('Choose either --candidate or --cache-check')
+    if split not in {'val', 'test'}:
+        raise ValueError('Invalid split')
+    if not cache_check:
+        source = Path(candidate).read_text()
     with baseline_app.run():
         check_checkpoints_ready.remote()
-    print(json.dumps(evaluate_candidate.remote(source, split), indent=2))
+    if cache_check:
+        run_cache_check(split, output_dir)
+        return
+    prepared = prepare_evaluation()
+    print(json.dumps(evaluate_candidate.remote(source, split,
+                     prepared['cache_key'], prepared['sandbox_image_id']), indent=2))
