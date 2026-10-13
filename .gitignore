@@ -233,3 +233,5 @@ research_agent/references/**
 
 tests
 tests/**
+
+.vscode
