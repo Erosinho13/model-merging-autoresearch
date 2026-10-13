@@ -1,4 +1,4 @@
-"""Test-only evaluation of the released non-KnOTS NLP configurations."""
+"""Validation/test evaluation of released NLP merging configurations."""
 
 import argparse
 import gc
@@ -19,6 +19,8 @@ METHODS = {
     "task_arithmetic": "llama8B_r16_tv",
     "ties": "llama8B_r16_ties",
     "dare_ties": "llama8B_r16_dare_ties",
+    "knots_ties": "llama8B_r16_knots_ties",
+    "knots_dare_ties": "llama8B_r16_knots_dare_ties",
 }
 DARE_SEEDS = (420, )
 EVALUATIONS = (*METHODS, "base", *TASKS)
@@ -36,6 +38,9 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
     # Empty-string cache_dir overrides HF_HOME; None uses the same default cache
     # as snapshot_download in the CPU preparation step.
     config["model"]["cachedir"] = None
+    # A blank path means compute the KnOTS alignment in memory, not torch.load("").
+    if not config["task_merge_config"].get("ingredients_path"):
+        config["task_merge_config"]["ingredients_path"] = None
     if method == "average":
         config["task_merge_config"]["scaling_coeffs"] = [1.0 / len(TASKS)]
     if scale is not None:
@@ -43,12 +48,12 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
             raise ValueError("Positive scale overrides apply only to merge methods other than average")
         config["task_merge_config"]["scaling_coeffs"] = [scale]
     if top_k is not None:
-        if method not in {"ties", "dare_ties"} or not 1 < top_k <= 100:
+        if method not in {"ties", "dare_ties", "knots_ties", "knots_dare_ties"} or not 1 < top_k <= 100:
             raise ValueError("top-k must be a retention percentage in (1, 100] for TIES/DARE-TIES")
         config["task_merge_config"]["topK"] = top_k
     if dare_pruning_coeffs is not None:
-        if method != "dare_ties" or not 0 <= dare_pruning_coeffs < 1:
-            raise ValueError("dare-pruning-coeffs must be in [0, 1) and applies only to DARE-TIES")
+        if not config["task_merge_config"].get("dare") or not 0 <= dare_pruning_coeffs < 1:
+            raise ValueError("dare-pruning-coeffs must be in [0, 1) and applies only to DARE-enabled methods")
         config["task_merge_config"]["dare_pruning_coeffs"] = dare_pruning_coeffs
     # Keep the pruning seed explicit; no validation-based seed selection.
     if config["task_merge_config"].get("dare"):
@@ -119,7 +124,7 @@ def run(method, output_dir, seed=420, split="test", scale=None, top_k=None, dare
 def load_merged(method, raw):
     import torch
     from ft_handlers import LoRAHandler
-    from task_merger import VectorMerger
+    from task_merger import get_merge_handler
     from utils import prepare_llama
 
     progress("Loading base model and three adapters on CPU")
@@ -135,15 +140,26 @@ def load_merged(method, raw):
             raise RuntimeError(f"Cannot recover an unambiguous 3x4096 head for {task}")
         heads[task] = matches[0][1]
         progress(f"Recovered {task} head: {tuple(heads[task].shape)}")
-    merger = VectorMerger(models["bases"], models["new"], LoRAHandler,
-                          device="cpu", merge_config=raw["task_merge_config"])
+    merge_config = raw["task_merge_config"]
+    aligned = merge_config["representation"] == "svd-vector"
+    # Accelerate the released float64 SVD on CUDA; source models stay on CPU.
+    merge_device = "cuda" if aligned and torch.cuda.is_available() else "cpu"
+    merger_class = get_merge_handler(merge_config["representation"])
+    merger = merger_class(models["bases"], models["new"], LoRAHandler,
+                          device=merge_device, merge_config=merge_config)
     scaling = raw["task_merge_config"]["scaling_coeffs"][0]
     merger.set_scaling_coeffs(float(scaling))
-    progress(f"Merging task updates on CPU using {method}")
     with torch.no_grad():
-        merged = merger.merge(raw["task_merge_config"])
+        if aligned:
+            progress(f"Computing KnOTS SVD alignment on {merge_device}; this may take several minutes")
+            merger.transform(merge_config)
+            progress("KnOTS alignment complete")
+        progress(f"Merging task updates using {method}")
+        merged = merger.merge(merge_config)
     progress("Merge complete; releasing source models")
     del merger, models
+    if aligned and torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return merged, heads
 
 
@@ -213,17 +229,17 @@ def main():
     parser.add_argument("--dare-pruning-coeffs", type=float,
                         help="DARE drop probability p in [0, 1)")
     parser.add_argument("--seed", type=int, choices=DARE_SEEDS,
-                        help="Run one seed only; DARE defaults to all five")
+                        help="Run one seed only; DARE methods use DARE_SEEDS")
     args = parser.parse_args()
     fixed_config(args.method, scale=args.scale, top_k=args.top_k,
                  dare_pruning_coeffs=args.dare_pruning_coeffs)
     if args.dry_run:
-        seeds = [args.seed] if args.seed is not None else (DARE_SEEDS if args.method == "dare_ties" else [420])
+        seeds = [args.seed] if args.seed is not None else (DARE_SEEDS if fixed_config(args.method)["task_merge_config"].get("dare") else [420])
         print(json.dumps([fixed_config(args.method, seed, args.scale, args.top_k, args.dare_pruning_coeffs) for seed in seeds], indent=2))
     elif args.seed is not None:
         run(args.method, args.output_dir, args.seed, args.split, args.scale, args.top_k, args.dare_pruning_coeffs)
     else:
-        seeds = DARE_SEEDS if args.method == "dare_ties" else (420,)
+        seeds = DARE_SEEDS if fixed_config(args.method)["task_merge_config"].get("dare") else (420,)
         reports = []
         progress(f"Running {args.method} for seeds {list(seeds)}")
         # Separate processes release model/GPU memory fully between seeds.

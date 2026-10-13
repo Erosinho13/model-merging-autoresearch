@@ -215,14 +215,14 @@ def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: 
     """Evaluate one fixed baseline with cached weights; no online downloads."""
     import subprocess
     import sys
-    if method not in {"average", "task_arithmetic", "ties", "dare_ties", "base", "snli", "mnli", "scitail"}:
+    from eval_scripts.nli_fixed_test import EVALUATIONS, fixed_config
+    if method not in EVALUATIONS:
         raise ValueError("Unsupported baseline")
     if not Path("/cache/checkpoints-ready.json").exists():
         raise RuntimeError("Run --download first to cache weights and verify heads")
     os.chdir("/workspace")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
-    from eval_scripts.nli_fixed_test import fixed_config
     fixed_config(method, scale=scale if scale else None, top_k=top_k if top_k else None,
                  dare_pruning_coeffs=None if dare_pruning_coeffs == -1 else dare_pruning_coeffs)
     output_dir = "/results/fixed-test" if split == "test" and scale == 0 and top_k == 0 and dare_pruning_coeffs == -1 else f"/results/hp/{method}/{split}/scale-{scale}_topk-{top_k}"

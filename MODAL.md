@@ -57,6 +57,8 @@ python -m modal run modal_app.py --method task_arithmetic
 python -m modal run modal_app.py --method average
 python -m modal run modal_app.py --method ties
 python -m modal run modal_app.py --method dare_ties
+python -m modal run modal_app.py --method knots_ties
+python -m modal run modal_app.py --method knots_dare_ties
 python -m modal run modal_app.py --method base
 python -m modal run modal_app.py --method snli
 python -m modal run modal_app.py --method mnli
@@ -71,8 +73,11 @@ To compare TIES hyperparameters on validation, use `--method ties --split val
 --scale 0.5 --top-k 40` (on one command line). Candidate results go under `/hp`
 in the results volume; select settings on validation before running `--split test`.
 Each method evaluates the three test subsets with released repository defaults;
-DARE evaluates seeds 420–424 and reports mean and sample standard deviation
-without validation selection. Deterministic methods run once. Results are saved under
+DARE methods use `DARE_SEEDS` (currently seed 420). Deterministic methods run once.
+KnOTS methods use the released SVD alignment with column concatenation and the
+original singular-value threshold; alignment runs on GPU before evaluation.
+These three-task fixed-setting runs are not an exact reproduction of the paper's
+six-task, validation-tuned table. Results are saved under
 `/fixed-test` in `lora-merging-results`. The new runner requests A100-40GB for
 unquantized float32 inference; memory fit and numerical results remain unverified.
 
