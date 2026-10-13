@@ -221,3 +221,11 @@ __marimo__/
 
 
 .DS_store
+
+# Research run artifacts (candidate snapshots may contain generated code).
+agent-runs/
+agent-logs/
+
+research_agent/references/**
+!research_agent/references/convert_paper.sh
+!research_agent/references/README.md

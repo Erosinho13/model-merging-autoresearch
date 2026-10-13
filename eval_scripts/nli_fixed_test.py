@@ -29,7 +29,7 @@ def progress(message):
     print(f"[{timestamp}] {message}", flush=True)
 
 
-def fixed_config(method, seed=420, scale=None, top_k=None):
+def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=None):
     if method not in EVALUATIONS:
         raise ValueError(f"Unknown evaluation: {method}")
     config = select_benchmark(importlib.import_module(f"configs.{METHODS.get(method, 'llama8B_r16_tv')}").config)
@@ -46,6 +46,10 @@ def fixed_config(method, seed=420, scale=None, top_k=None):
         if method not in {"ties", "dare_ties"} or not 1 < top_k <= 100:
             raise ValueError("top-k must be a retention percentage in (1, 100] for TIES/DARE-TIES")
         config["task_merge_config"]["topK"] = top_k
+    if dare_pruning_coeffs is not None:
+        if method != "dare_ties" or not 0 <= dare_pruning_coeffs < 1:
+            raise ValueError("dare-pruning-coeffs must be in [0, 1) and applies only to DARE-TIES")
+        config["task_merge_config"]["dare_pruning_coeffs"] = dare_pruning_coeffs
     # Keep the pruning seed explicit; no validation-based seed selection.
     if config["task_merge_config"].get("dare"):
         config["task_merge_config"]["dare_seed"] = seed
@@ -81,7 +85,7 @@ def load_unmerged(selection, raw):
     return model, heads
 
 
-def run(method, output_dir, seed=420, split="test", scale=None, top_k=None):
+def run(method, output_dir, seed=420, split="test", scale=None, top_k=None, dare_pruning_coeffs=None):
     started = monotonic()
     progress(f"Starting {method}, seed {seed}; importing ML libraries")
     import torch
@@ -90,7 +94,7 @@ def run(method, output_dir, seed=420, split="test", scale=None, top_k=None):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for the full Llama evaluation")
     set_seed(seed)
-    raw = fixed_config(method, seed, scale, top_k)
+    raw = fixed_config(method, seed, scale, top_k, dare_pruning_coeffs)
     print(json.dumps(raw["task_merge_config"], indent=2), flush=True)
     if method not in METHODS:
         merged, heads = load_unmerged(method, raw)
@@ -206,14 +210,18 @@ def main():
     parser.add_argument("--split", choices=("val", "test"), default="test")
     parser.add_argument("--scale", type=float)
     parser.add_argument("--top-k", type=float)
+    parser.add_argument("--dare-pruning-coeffs", type=float,
+                        help="DARE drop probability p in [0, 1)")
     parser.add_argument("--seed", type=int, choices=DARE_SEEDS,
                         help="Run one seed only; DARE defaults to all five")
     args = parser.parse_args()
+    fixed_config(args.method, scale=args.scale, top_k=args.top_k,
+                 dare_pruning_coeffs=args.dare_pruning_coeffs)
     if args.dry_run:
         seeds = [args.seed] if args.seed is not None else (DARE_SEEDS if args.method == "dare_ties" else [420])
-        print(json.dumps([fixed_config(args.method, seed, args.scale, args.top_k) for seed in seeds], indent=2))
+        print(json.dumps([fixed_config(args.method, seed, args.scale, args.top_k, args.dare_pruning_coeffs) for seed in seeds], indent=2))
     elif args.seed is not None:
-        run(args.method, args.output_dir, args.seed, args.split, args.scale, args.top_k)
+        run(args.method, args.output_dir, args.seed, args.split, args.scale, args.top_k, args.dare_pruning_coeffs)
     else:
         seeds = DARE_SEEDS if args.method == "dare_ties" else (420,)
         reports = []
@@ -228,6 +236,8 @@ def main():
                 command += ["--scale", str(args.scale)]
             if args.top_k is not None:
                 command += ["--top-k", str(args.top_k)]
+            if args.dare_pruning_coeffs is not None:
+                command += ["--dare-pruning-coeffs", str(args.dare_pruning_coeffs)]
             subprocess.run(command, check=True)
             reports.append(json.loads(Path(args.output_dir, f"{args.method}_seed_{seed}.json").read_text()))
         summary = summarize(reports)

@@ -210,7 +210,8 @@ def check_checkpoints_ready():
               timeout=3600, max_containers=1, scaledown_window=2,
               volumes={"/cache": cache, "/results": results},
               secrets=[modal.Secret.from_name("huggingface", required_keys=["HF_TOKEN"])])
-def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: float = 0.0):
+def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: float = 0.0,
+                   dare_pruning_coeffs: float = -1.0):
     """Evaluate one fixed baseline with cached weights; no online downloads."""
     import subprocess
     import sys
@@ -221,7 +222,12 @@ def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: 
     os.chdir("/workspace")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_DATASETS_OFFLINE"] = "1"
-    output_dir = "/results/fixed-test" if split == "test" and scale == 0 and top_k == 0 else f"/results/hp/{method}/{split}/scale-{scale}_topk-{top_k}"
+    from eval_scripts.nli_fixed_test import fixed_config
+    fixed_config(method, scale=scale if scale else None, top_k=top_k if top_k else None,
+                 dare_pruning_coeffs=None if dare_pruning_coeffs == -1 else dare_pruning_coeffs)
+    output_dir = "/results/fixed-test" if split == "test" and scale == 0 and top_k == 0 and dare_pruning_coeffs == -1 else f"/results/hp/{method}/{split}/scale-{scale}_topk-{top_k}"
+    if dare_pruning_coeffs != -1:
+        output_dir += f"_p-{dare_pruning_coeffs}"
     try:
         command = [sys.executable, "-m", "eval_scripts.nli_fixed_test",
                    "--method", method, "--split", split, "--output-dir", output_dir]
@@ -229,6 +235,8 @@ def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: 
             command += ["--scale", str(scale)]
         if top_k:
             command += ["--top-k", str(top_k)]
+        if dare_pruning_coeffs != -1:
+            command += ["--dare-pruning-coeffs", str(dare_pruning_coeffs)]
         subprocess.run(command, check=True)
         return json.loads(Path(output_dir, f"{method}.json").read_text())
     finally:
@@ -238,14 +246,15 @@ def evaluate_fixed(method: str, split: str = "test", scale: float = 0.0, top_k: 
 @app.local_entrypoint()
 def main(check: bool = True, module: str = "", prepare: bool = False,
          download: bool = False, method: str = "", split: str = "test",
-         scale: float = 0.0, top_k: float = 0.0):
+         scale: float = 0.0, top_k: float = 0.0, dare_pruning_coeffs: float = -1.0):
     if method:
         from eval_scripts.nli_fixed_test import fixed_config
-        fixed_config(method, scale=scale if scale else None, top_k=top_k if top_k else None)
+        fixed_config(method, scale=scale if scale else None, top_k=top_k if top_k else None,
+                     dare_pruning_coeffs=None if dare_pruning_coeffs == -1 else dare_pruning_coeffs)
         if split not in {"val", "test"}:
             raise ValueError("split must be val or test")
         check_checkpoints_ready.remote()
-        print(json.dumps(evaluate_fixed.remote(method, split, scale, top_k), indent=2))
+        print(json.dumps(evaluate_fixed.remote(method, split, scale, top_k, dare_pruning_coeffs), indent=2))
     elif download:
         print(json.dumps(download_weights.remote(), indent=2))
     elif module:
