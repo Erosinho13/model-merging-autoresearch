@@ -93,7 +93,7 @@ by your provider. A Codex model label is not necessarily an API model identifier
 model API charges are separate from Modal charges.
 
 ```bash
-inspect eval research_agent/task.py \
+python -m inspect_ai eval research_agent/task.py \
   --model <provider/model> \
   -T max_evaluations=3 \
   -T token_budget=30000 \
@@ -102,6 +102,8 @@ inspect eval research_agent/task.py \
 ```
 
 These are the defaults; omit the corresponding `-T` arguments to use them.
+The token limit counts input and output across all model calls, including cached
+input and repeated conversation history; it is not just a generated-output limit.
 `time_limit` is measured in seconds and enforced by Inspect's per-sample timer.
 There is one sample per research run. It includes model calls, tool execution and
 evaluation waits. The agent can check the timer through `get_budget`; evaluation

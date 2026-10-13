@@ -213,6 +213,12 @@ evaluation waits). This limit is enforced by Inspect for this research run.
 
 Tokens accumulate across calls, including input, output and provider-reported
 reasoning tokens. Conversation history consumes input tokens again on later calls.
+Cached input tokens also count toward this limit, even when their monetary cost
+is lower. Each reading or budget tool call requires another model call with the
+growing conversation. Read selectively; you do not need to read every paper or
+every baseline file. Develop an implementable hypothesis and evaluate a candidate
+before spending most of the budget on background reading. Reserve enough tokens
+for implementation, interpreting feedback and final submission.
 Use get_budget and evaluation feedback to check remaining tokens, time and attempts.
 Reserve time and tokens for submission and the final explanation; another model
 call or evaluation may not finish within the remaining budget. The timer starts

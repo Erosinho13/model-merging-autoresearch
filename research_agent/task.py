@@ -11,6 +11,8 @@ from time import monotonic
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
+from inspect_ai.event import ErrorEvent, SampleLimitEvent
+from inspect_ai.log import transcript
 from inspect_ai.solver import Generate, TaskState, generate, solver, use_tools
 from inspect_ai.tool import tool, ToolResult
 from inspect_ai.model import ContentImage, ContentText
@@ -22,7 +24,20 @@ from private_eval.scoring import load_reference
 ROOT = Path(__file__).resolve().parent
 
 
-# Source and file-reading helpers
+# Source, file-reading and termination helpers
+
+def termination_reason(events):
+    """Use Inspect's recorded stop event rather than guessing from usage."""
+    reasons = {"token": "token budget exceeded", "time": "time limit exceeded",
+               "message": "message limit exceeded", "working": "working time limit exceeded",
+               "turn": "turn limit exceeded", "cost": "cost limit exceeded",
+               "operator": "stopped by operator", "custom": "custom limit reached"}
+    for event in reversed(events):
+        if isinstance(event, SampleLimitEvent):
+            return reasons[event.type]
+        if isinstance(event, ErrorEvent):
+            return "execution error (see Inspect log)"
+    return "completed normally"
 
 def check_source(source, require_implementation=False):
     if len(source.encode()) > 100_000:
@@ -91,17 +106,24 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
 
     async def finalize(state: TaskState):
         # Inspect task cleanup also runs on token/message/time-limit termination.
-        async with lock:
-            if submitted:
-                return
-            if successful:
-                tests = [item for item in successful.values() if item["report"]["split"] == "test"]
-                best = max(tests or list(successful.values()), key=lambda item: item["report"]["scores"]["avg"])
-                selection = "fallback_best_test" if tests else "fallback_best_validation"
-                freeze(best["source"], best["report"], best["explanation"], selection)
-            else:
-                (folder / "submission.json").write_text(json.dumps(
-                    {"selection": "none", "reason": "No successfully evaluated candidate"}, indent=2))
+        try:
+            async with lock:
+                if submitted:
+                    return
+                if successful:
+                    tests = [item for item in successful.values() if item["report"]["split"] == "test"]
+                    best = max(tests or list(successful.values()), key=lambda item: item["report"]["scores"]["avg"])
+                    selection = "fallback_best_test" if tests else "fallback_best_validation"
+                    freeze(best["source"], best["report"], best["explanation"], selection)
+                else:
+                    (folder / "submission.json").write_text(json.dumps(
+                        {"selection": "none", "reason": "No successfully evaluated candidate"}, indent=2))
+        finally:
+            try:
+                events = transcript().events
+            except RuntimeError:
+                events = []  # Direct local tool tests have no Inspect transcript.
+            print(f"[Research run ended] {termination_reason(events)}", flush=True)
 
     # Agent tools
 
@@ -286,7 +308,11 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
     if max_evaluations < 1 or token_budget < 1 or time_limit < 1:
         raise ValueError("Budgets must be positive")
     
-    folder = Path(run_dir) / uuid.uuid4().hex
+    # Inspect changes the working directory during task loading and execution.
+    run_root = Path(run_dir).expanduser()
+    if not run_root.is_absolute():
+        run_root = ROOT.parent / run_root
+    folder = run_root.resolve() / uuid.uuid4().hex
     folder.mkdir(parents=True, exist_ok=False)
     source = (ROOT / "candidate.py").read_text()
 
