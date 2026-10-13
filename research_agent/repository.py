@@ -15,7 +15,7 @@ PRIVATE_PATHS = (
     "modal_app.py", "modal_diagnostics.py", "research_agent/task.py",
     "research_agent/bridge.py", "research_agent/modal_runner.py",
     "research_agent/worker.py", "tests/",
-    "README.md", "AGENT.md", "MODAL.md", "requirements-modal.txt",
+    "README.md", "MODAL.md", "requirements-modal.txt",
     "conda_environment.yaml", "research_agent/repository.py",
     "research_agent/prompt.md", "research_agent/examples/",
 )
@@ -23,7 +23,6 @@ PRIVATE_PATHS = (
 
 def public_repository():
     files = {name: (ROOT / name).read_text() for name in PUBLIC_FILES}
-    files["README.md"] = (ROOT / "research_agent/interface.md").read_text()
     files["baseline_results.md"] = (ROOT / "research_agent/baseline_results.md").read_text()
     # Refuse accidental inclusion of the withheld method or checkpoint names.
     if any("knots" in source.lower() for source in files.values()):

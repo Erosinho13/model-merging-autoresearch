@@ -1,51 +1,102 @@
-# Research task: develop a LoRA model-merging algorithm
+# Task brief: develop a novel algorithm for merging LoRA adapters
 
-Develop and implement a principled algorithm for merging three LoRA-finetuned
-Llama-3-8B models into one backbone. The adapters were trained on SNLI, MNLI and
-SciTail. Aim to improve on the available merging baselines, while explaining what
-is new and why it should help. Hyperparameter tuning and combinations of known
-methods are allowed experiments, but do not by themselves establish novelty.
+## Research goal
 
-## Objective and available evidence
+You are conducting AI research. Develop and implement a novel LoRA model-merging
+algorithm, supported by a clear technical contribution and reproducible evidence.
+Aim for a result strong enough to form the basis of an excellent research paper.
 
-The evaluation returns SNLI, MNLI, SciTail ($T=3$ tasks) and Avg. Maximize the test Avg;
-improvements across individual tasks are also desirable.
-Read baseline_results.md through read_repository: it
-lists named baselines and the anonymous reference's scores. The reference's
-identity, implementation and hyperparameters remain private. Do not infer an
-innovation grade from performance; novelty is not automatically scored.
+Your method must be general-purpose: it should apply to other tasks and collections
+of compatible adapters, rather than depend on the particular benchmark below.
+Explain the problem it addresses, the new insight, and why the proposed mechanism
+should help. State its assumptions and distinguish intended applicability from
+experimentally demonstrated generalization.
 
-On test, each task's score is its accuracy relative to the reference algorithm:
+For this task, assess novelty relative to the field at the start of 2026. Similarity
+to work introduced later does not automatically disqualify a proposal. Explain its
+relationship to the supplied papers and other prior work you know. Performance is
+scored automatically; algorithmic novelty is a research requirement, not a separate
+automated grade.
+
+## Research task, data, metrics and baselines
+
+### Experimental testbed
+
+The repository supplies three LoRA-finetuned Llama-3-8B models, trained on SNLI,
+MNLI and SciTail. Your algorithm combines their updates into one backbone, which
+is evaluated on all three tasks with the corresponding fixed classification heads.
+The current experiment uses three rank-16 adapters. This setup is a testbed for
+your research, not a restriction on the intended applicability of the algorithm.
+
+### Metrics
+
+The evaluation tool returns SNLI, MNLI, SciTail ($T = 3$ tasks) and Avg.
+The raw metric used for all these tasks is accuracy percentage. On the test split,
+each task final score is its accuracy relative to an anonymous reference algorithm:
 
 $score_t = 100 \times \frac{\text{candidate accuracy}_t}{\text{reference accuracy}_t}$
 
 $Avg = \frac{1}{T}\sum_{t=1}^T(score_t)$
 
-100 means parity with the reference; higher is better and scores are not capped.
-The private test reference accuracies supplied by
-the operator are rounded to two decimals. The baseline table is display-rounded.
+Maximize test Avg; improvements on individual tasks are also desirable. A score
+of 100 means parity with the reference. Higher is better, and scores are not capped.
+The private reference accuracies come from the operator's measurements rounded
+to two decimals. The public results table is also rounded for display.
 
-Both val and test are available. Test returns four reference-relative percentages.
-Validation returns three raw accuracy percentages and their arithmetic mean;
-validation reference accuracies are unavailable. Feedback labels its score_type.
-Do not compare validation raw accuracy with test relative scores as the same metric.
-Hyperparameter tuning is optional. If you compare or choose hyperparameters, you
-must evaluate them on val and base those choices on validation evidence. You may
-use test feedback for research and benchmark comparison; it is not an unseen holdout.
-Submission requires a successful evaluation of the exact code, on either split.
-Fallback selects the highest test Avg if any test candidates succeeded, otherwise
-the highest raw validation Avg. It never mixes the two scoring scales.
-No additional unseen-dataset evaluation is scheduled in this version.
+Both validation and test feedback are available. Validation returns raw accuracy
+percentages and their arithmetic mean. Test returns the reference-relative
+percentages defined above.
+Feedback identifies the split and score_type; do not compare raw validation and
+relative test values as if they were the same metric. Test feedback is visible
+during research. Additional unseen-dataset checks are not part of this run.
 
-Public code and settings are supplied through read_repository. There is no direct
-baseline-evaluation tool. You may reuse a baseline inside your candidate, but
-evaluating it consumes an ordinary attempt. Named baselines are distinguishable
-from the anonymous reference; you can compare their per-task and aggregate scores.
+### Baselines and reference results
 
-## Interface and permitted changes
+Read baseline_results.md through read_repository for measured test results.
+Named methods include averaging, Task Arithmetic, TIES and DARE-TIES; their
+implementations and settings are public. The anonymous reference's identity,
+implementation and settings are withheld, while its scores are visible.
+Use these comparisons to assess practical improvement. Benchmark gains alone
+do not establish novelty or generalization.
 
-Read README.md through read_repository first; it is the public interface guide.
-The initial candidate.py contains an empty function. Implement this exact signature:
+## Scope
+
+### Your algorithm and editable code
+
+Your contribution is a novel merging algorithm, specifically designed for LoRA
+adapters, applied to the supplied model weights and adapter information.
+Implement it in candidate.py, keeping the fixed merge
+signature. You may add helpers in that file and import installed libraries or
+public baseline modules. The operator's repository files remain read-only.
+
+Dataset-specific branches, manually selecting a different method for each task,
+and changes to evaluation behavior are strictly forbidden.
+
+### Hyperparameters and reuse of existing methods
+
+Hyperparameter tuning is optional. If you compare or choose hyperparameters,
+evaluate the alternatives on the validation split and base those choices on
+validation evidence. Test feedback may guide research and benchmark comparison.
+Tuning a known method alone does not meet the innovation objective. When combining
+known methods, explain the additional mechanism or insight and support its value
+with experiments where the budget permits.
+
+### Fixed infrastructure
+
+The evaluator controls datasets, preprocessing, trained classification heads and
+scoring. Candidate code cannot access or modify them. Do not introduce extra
+training data, attempt to access private files or credentials, or fabricate results.
+
+The evaluator receives only the backbone weights identified by the task-vector keys.
+Write your final merged weights into those tensors. Changes to LoRA factors, other
+parameters, classifier heads or model architecture are not exported. Preserve the
+exported tensors' original shapes and finite floating-point values. Factor-based
+methods must reconstruct their merged update and apply it to these backbone weights.
+
+## Task details and function interface
+
+The complete input contract is given here. The editable candidate.py starts with
+an empty function. Implement this exact signature:
 
 ```python
 def merge(
@@ -56,107 +107,146 @@ def merge(
     pass
 ```
 
-LoRAFactors is defined in merging_types.py. Each layer entry contains the original
-A and B tensors and its effective scaling multiplier. Inputs are on CPU; task
-vectors are dense float32 matrices, not flattened vectors. Both input lists use
-SNLI, MNLI, SciTail order and matching layer keys. Read the guide for factor
-shapes, reference subtraction and the distinction between dense updates and
-scaled B@A products. The base model includes the reference adapter.
+Type annotations describe the contract; Python does not enforce them by itself.
+The worker checks that the returned value is a torch.nn.Module, and the evaluator
+validates the exported weights.
 
-You may replace candidate.py, add helper functions in it, and import installed
-libraries or public baseline modules. Return one merged model that is evaluated
-on all three tasks. Only the backbone weights identified by the task-vector keys
-are exported; write the resulting merged updates into those weights. Changes only
-to LoRA factor parameters, other weights, architecture or classifier heads are
-not transferred. The original shapes and finite floating values are required.
+When evaluation runs, the sandbox supplies these inputs:
 
-The research scope is the merging rule applied to the supplied weights and factors.
-Use one general rule across tasks. Layer- or adapter-dependent quantities derived
-from the tensors are allowed; dataset-name-specific hacks are outside scope.
-Do not train on additional data, change evaluation behavior, attempt to discover
-private files or credentials, or fabricate evaluation reports. Dataset loaders,
-trained classification heads and scoring code remain under operator control.
+- base_model: a CPU PEFT sequence-classification model with the repository's reference
+  adapter installed.
+  This input adapter is distinct from the anonymous reference algorithm used for
+  scoring. Use base_model.state_dict() to read and update the backbone weights.
+  Preserve the installed adapter's structure; it remains active during evaluation.
+- task_vectors: dense CPU float32 task updates, keyed by backbone weight names.
+  The repository constructs them as B@A_task minus B@A_reference. They are matrices,
+  not flattened vectors. All dictionaries have identical keys; each tensor's shape
+  matches its corresponding backbone weight.
+- lora_adapters: copies of the original task adapter factors on CPU, not
+  reference-subtracted factors or an SVD refactorization. The dictionaries use the
+  same keys as task_vectors. Each entry is a LoRAFactors TypedDict defined in
+  merging_types.py: A is a torch.Tensor of shape [rank, input_features], B is a
+  torch.Tensor of shape [output_features, rank], and scaling is a float (normally
+  alpha/r). The effective adapter update is scaling * (B @ A).
 
-## Tools and execution
-
-- read_repository: list/read the public repository and current candidate; read-only.
-- read_reference: list/read supplied paper Markdown, including paper subfolders.
-  Both reading tools accept start, lines (default 200), and max_chars (default
-  20000). Choose positive limits to match your remaining token budget; neither
-  limit has a fixed upper cap. Characters are not tokens. Start with focused
-  excerpts, expand when useful, and check get_budget before large reads. The
-  character limit applies to the excerpt, excluding its header and truncation notice.
-- write_candidate: replace candidate.py and check syntax and signature.
-- get_budget: inspect cumulative tokens and remaining evaluation attempts.
-- evaluate_candidate(explanation=..., split="val" or "test"): run the candidate
-  and receive four split-specific scores or an error, together with budget status.
-- submit_candidate(explanation=...): freeze a successfully evaluated candidate;
-  the optional explanation can update its write-up with observed evidence.
-
-There is no general shell, independent code-execution, internet or image-reading
-tool. To execute your candidate, use evaluate_candidate. It runs inside a separate
-CPU sandbox without datasets, credentials or evaluator source. Paper captions and
-Markdown are readable; figure images are not directly viewable through these tools.
-
-The candidate sandbox has eight CPUs, 96 GiB RAM and a ten-minute timeout.
-Installed libraries include PyTorch 2.2.2, Transformers 4.40.2, PEFT 0.3.0,
-Accelerate 0.26.1, NumPy 1.26.4 and safetensors 0.4.1. No GPU is provided to candidate
-code. The trusted evaluator handles GPU inference and has a one-hour timeout.
-
-## Experiment discipline
-
-Use the supplied papers and baseline implementations to identify a concrete
-limitation and a testable hypothesis. Before each evaluation, explain the proposed
-mechanism and expected effect; expected improvements are hypotheses, not results.
-Check dimensions and API usage while writing code. The empty pass stub and invalid
-signatures are rejected locally without spending an experiment; remote failures
-consume attempts. Syntax checks do not verify numerical correctness.
-
-Prefer experiments that distinguish explanations of a result. When the budget
-permits, use a focused ablation instead of adding several untested components.
-Compare per-task results as well as the average, and document regressions. Do not
-rerun unchanged stochastic candidates with different seeds just to select lucky
-scores. If your method uses randomness, declare and fix its seed in the code.
-Hyperparameter choices and tensor-derived weighting rules must be reproducible.
-
-Use get_budget and returned budget status to plan remaining work. Tokens count
-cumulatively across calls, including repeated conversation history. Reserve enough
-for submission; stop when further experiments are unlikely to be informative or
-would prevent a valid submission. The numerical budgets follow below.
-
-## Required artifacts and honest reporting
-
-Every evaluate_candidate call requires a nonempty Markdown explanation of at most
-20 KB. Include the algorithm, equations or pseudocode, hyperparameters, relationship
-to prior work, rationale and limitations. The runner saves it with that exact code
-snapshot as algorithm_<attempt>.md, including for failed remote attempts.
-
-Choose your best successfully evaluated candidate, restore its exact source with
-write_candidate if needed, and call submit_candidate. In the final explanation,
-identify the matching experiment, report only tool-observed scores, labeling val and test separately,
-state which components were actually evaluated, and distinguish reuse, tuning and
-proposed new contributions. Disclose negative results and selection among attempts.
-Do not describe the visible test results as unseen holdout performance, or claim
-broad generalization or proven novelty.
-
-Submission saves submission.py, algorithm.md and submission.json. If you omit the
-submission explanation, the saved evaluation explanation is reused. If the run
-ends without explicit submission, cleanup selects the best successfully evaluated
-candidate by test Avg (or raw validation Avg if none has test results) and retains its matching explanation. With
-no successful evaluation, there is no valid submission. Do not rely on fallback
-selection to replace a deliberate, well-documented final submission.
-
-## Run resources and initial candidate
-
-GPU evaluation limit: {{max_evaluations}}.
-Total token budget for this research run: {{token_budget}}.
-This is cumulative input and output usage, including provider-reported reasoning
-tokens. Conversation history consumes input tokens again on subsequent calls.
-Use get_budget to check remaining resources; evaluation feedback also includes them.
-Reserve tokens for submission and final explanation; another full call may not fit
-even when some tokens remain.
+Use the original LoRA factors, dense task vectors, or both as your method requires.
+Both lists follow SNLI, MNLI, SciTail order in this experiment. The dense-update
+helper does not apply scaling; the supplied adapters have alpha=rank=16, so their
+scaling is one. Consult the public utilities before mixing dense
+updates and original factors or applying updates to the base model.
 
 Initial candidate:
 ```python
 {{initial_candidate}}
 ```
+
+## Workspace and available resources
+
+You have access to the following through the provided tools:
+
+- Public repository source: merging_functions.py, masking_ops.py, ft_handlers.py,
+  task_merger.py, utils.py, baseline_configs.py and merging_types.py.
+- baseline_results.md, the measured test-score table with named baselines and the
+  anonymous reference. The merging interface is documented in this prompt.
+- Reference papers in Markdown, including captions. Figure images cannot be
+  viewed through the reading tools.
+- candidate.py, the only editable source file, and the evaluation and budget tools.
+
+baseline_configs.py contains the public methods' settings. In the current three-adapter
+benchmark, averaging sums the updates with coefficient 1/3. Candidate code can
+import the listed public modules directly from the sandbox's Python path.
+
+The evaluation tool supplies model inputs inside the sandbox. Reading tools expose
+code and papers, not model checkpoints. Evaluator source, dataset loaders, private
+reference code and settings, and operator infrastructure are hidden.
+There is no direct baseline-running tool. Reusing a public baseline inside your
+candidate is allowed; evaluating it consumes an ordinary evaluation attempt.
+
+## How work runs
+
+### Tools
+
+- read_repository: list or read public files and the current candidate.
+- read_reference: list or read supplied paper Markdown.
+- write_candidate: replace candidate.py and check syntax and the merge signature.
+- get_budget: report token usage, remaining evaluation attempts and remaining
+  wall-clock time in seconds, using the same timer that enforces the run limit.
+- evaluate_candidate(explanation=..., split="val" or "test"): execute the current
+  candidate and return four split-specific scores or an error, plus budget status.
+  The default split is val.
+- submit_candidate(explanation=...): freeze successfully evaluated code and its
+  Markdown explanation. An optional explanation updates the final write-up.
+
+Both reading tools accept start, lines (default 200) and max_chars (default 20000).
+Choose positive limits to fit your remaining budget; there is no fixed upper cap.
+Characters are not tokens. Read focused excerpts first and expand when useful.
+The character limit excludes the header and any truncation notice.
+
+### Execution environment
+
+To execute generated code, call evaluate_candidate. It runs your merging function
+in a separate CPU sandbox without datasets, credentials, evaluator source or
+network access. The trusted evaluator loads the exported weights and performs
+GPU inference outside that sandbox. No general shell or independent execution
+tool is available to the agent.
+
+The candidate sandbox has eight CPUs, 96 GiB RAM and a ten-minute timeout.
+Installed libraries include PyTorch 2.2.2, Transformers 4.40.2, PEFT 0.3.0,
+Accelerate 0.26.1, NumPy 1.26.4 and safetensors 0.4.1. Candidate code has no GPU.
+The trusted GPU evaluator has a one-hour timeout.
+
+### Budgets
+
+GPU evaluation limit: {{max_evaluations}}.
+Total token budget for this research run: {{token_budget}}.
+Agent wall-clock time limit: {{time_limit}} seconds (including model calls and
+evaluation waits). This limit is enforced by Inspect for this research run.
+
+Tokens accumulate across calls, including input, output and provider-reported
+reasoning tokens. Conversation history consumes input tokens again on later calls.
+Use get_budget and evaluation feedback to check remaining tokens, time and attempts.
+Reserve time and tokens for submission and the final explanation; another model
+call or evaluation may not finish within the remaining budget. The timer starts
+when Inspect begins the sample, not when the task files are constructed. The live
+timer reported by get_budget takes precedence if the operator overrides the limit.
+
+### Experiments and evidence
+
+Use papers and baseline code to identify a limitation and a testable hypothesis.
+Before each evaluation, explain your algorithm, its intended mechanism and expected
+effect. Expectations are hypotheses, not measured results. Check shapes and APIs;
+local syntax checks do not verify numerical correctness. Empty implementations and
+invalid signatures are rejected before spending an attempt. Remote failures consume
+an attempt, as do evaluations on either split.
+
+Prefer experiments that distinguish competing explanations. Where budget permits,
+use focused ablations and document per-task regressions as well as average gains.
+Declare and fix random seeds; do not rerun unchanged stochastic candidates with
+different seeds just to select lucky scores. Make tensor-derived rules and chosen
+hyperparameters reproducible. Stop experimenting in time to submit valid work.
+
+## Submitting
+
+Submit the implemented merge function and a Markdown explanation of the algorithm
+and its experimental evidence. Every evaluation requires a nonempty explanation
+of at most 20 KB. Include equations or pseudocode, hyperparameters, relationship
+to prior work, rationale and limitations. The runner saves each explanation with
+its exact code snapshot as algorithm_<attempt>.md, including failed remote attempts.
+
+Restore your chosen successfully evaluated source using write_candidate if needed,
+then call submit_candidate. Evaluation must have succeeded for that exact source
+on either split. Submission saves submission.py, algorithm.md and submission.json.
+If you omit the final explanation argument, the evaluated explanation is reused.
+
+In your write-up and final response, identify the supporting experiments and
+report only observed results, with validation and test clearly labeled. Explain
+which components were evaluated, what is reused, and what contribution you propose.
+Disclose failed ideas, regressions and selection among attempts. State limitations
+of the evidence; do not claim that visible test results demonstrate unseen-task
+generalization or prove novelty.
+
+If the run ends without explicit submission, cleanup selects the highest test Avg
+among successfully evaluated candidates. If none has test results, it uses the
+highest raw validation Avg. The selected code keeps its matching explanation;
+raw and relative scoring scales are never mixed. Without a successful evaluation,
+there is no valid submission. Use explicit submission to record your intended result.

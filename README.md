@@ -41,6 +41,100 @@ python -m modal run modal_diagnostics.py --prepare
 Cloud commands incur compute charges. Evaluation defaults to test if `--split`
 is omitted. Select hyperparameters using validation before final testing.
 
+## Running and monitoring the research agent
+
+Place selected paper Markdown in `research_agent/references/` or its paper
+subfolders. See [reference preparation](research_agent/references/README.md)
+for PDF conversion.
+
+Before the first agent run, check the full candidate pipeline with averaging:
+
+```bash
+python -m modal run -m research_agent.modal_runner::main \
+  --candidate research_agent/examples/average.py --split val
+```
+
+Compare the returned raw validation accuracies with the averaging baseline on
+the same split. This check incurs Modal compute charges. The GPU remains allocated
+while candidate code runs in the CPU sandbox; transferring and reconstructing the
+model also adds overhead.
+
+Set your provider API credentials locally and use an API model identifier supported
+by your provider. A Codex model label is not necessarily an API model identifier;
+model API charges are separate from Modal charges.
+
+```bash
+inspect eval research_agent/task.py \
+  --model <provider/model> \
+  -T max_evaluations=3 \
+  -T token_budget=30000 \
+  -T time_limit=3600 \
+  --log-dir agent-logs
+```
+
+These are the defaults; omit the corresponding `-T` arguments to use them.
+`time_limit` is measured in seconds and enforced by Inspect's per-sample timer.
+There is one sample per research run. It includes model calls, tool execution and
+evaluation waits. The agent can check the timer through `get_budget`; evaluation
+feedback also includes remaining time, tokens and attempts.
+
+| Limit | Default | Enforced in |
+|---|---:|---|
+| Agent wall-clock runtime | 1 hour | `Task(time_limit=time_limit)` in `research_agent/task.py` |
+| Agent tokens | 30,000 | `Task(token_limit=token_budget)` in `research_agent/task.py` |
+| Messages | 60 | `Task(message_limit=60)` in `research_agent/task.py` |
+| Evaluation attempts, shared across val/test | 3 | `evaluate_candidate` tool in `research_agent/task.py` |
+| Candidate sandbox execution | 10 minutes | `timeout=600` in `research_agent/modal_runner.py` |
+| Each remote evaluation | 1 hour | `timeout=3600` in `research_agent/modal_runner.py` |
+
+The agent runtime starts when Inspect begins the sample. Individual Modal timeouts
+are separate limits. Stopping or timing out the local agent does not guarantee
+cancellation of an already-running Modal evaluation; monitor it in the Modal
+dashboard, where you can stop it if needed. These limits do not impose a dollar cap.
+
+Keep the evaluation terminal open for progress. In another terminal, activate the
+same environment, run from the repository root, and open the transcript viewer:
+
+```bash
+inspect view --log-dir agent-logs
+```
+
+Open the URL printed by Inspect and select the run to inspect messages, tool calls,
+feedback and usage. The Modal dashboard shows remote job status and worker output.
+For viewers on another machine, add `--log-shared 10` to the evaluation command to
+sync live events to the log directory every ten seconds; that directory must be
+accessible to the viewer.
+
+| Results location | Contents |
+|---|---|
+| `agent-runs/<run-id>/` | `prompt.txt`, current `candidate.py`, public repository snapshot, numbered `candidate_001.py`, `algorithm_001.md` and `result_001.json` files |
+| Same run directory, after submission or fallback | `submission.py`, `algorithm.md` and `submission.json`; if no evaluation succeeded, only a submission report explaining that no valid candidate exists |
+| `agent-logs/` | Inspect transcripts, usage, tool activity and errors |
+| Modal volume `lora-merging-results`, under `/agent/<experiment-id>/` | Candidate snapshot, `metadata.json`, `result.json` or `error.json` |
+| Modal volume `lora-candidate-io`, under `/<experiment-id>/` | Sandbox model inputs and exported tensors; these large files are currently retained |
+
+Inspect the numbered local result files as evaluations finish. Their
+`experiment_id` links successful local reports to the corresponding remote results.
+
+The agent can submit any exact source that has completed evaluation successfully.
+Submission saves its code, matching algorithm explanation and report. If no explicit
+submission is made, cleanup selects the best test Avg candidate, or the best raw
+validation Avg if none has test results. The two scales are never mixed. Without
+a successful evaluation, no valid candidate is submitted. Abrupt process termination
+can prevent cleanup; previously saved attempt files remain available.
+
+To evaluate the frozen submission directly, replace `<run-id>` with its local folder:
+
+```bash
+python -m modal run -m research_agent.modal_runner::main \
+  --candidate agent-runs/<run-id>/submission.py --split test
+```
+
+Test scores are `100 * candidate_accuracy / reference_accuracy` per task, with
+Avg their arithmetic mean. The private reference accuracies are configured in
+`private_eval/reference_scores.json`. Validation reports raw accuracies and their
+mean, without reference calibration.
+
 ## Repository layout
 
 | Location | Purpose |
@@ -56,10 +150,7 @@ is omitted. Select hyperparameters using validation before final testing.
 | `utils.py` | Public merging dispatch and seed utilities |
 | `research_agent/` | Preliminary Inspect tools, candidate execution and references |
 
-See [AGENT.md](AGENT.md) for the agent scaffold and
-[reference preparation](research_agent/references/README.md) for PDF conversion.
-Baseline JSON reports are saved in the Modal volume `lora-merging-results`;
-Inspect transcripts and candidate snapshots are saved locally during agent runs.
+Baseline JSON reports are saved in the Modal volume `lora-merging-results`.
 
 ## Evaluation integrity
 
@@ -68,7 +159,17 @@ papers, with one editable merging function. Evaluation code and KnOTS internals
 remain private; the agent receives an evaluation tool that returns scores.
 The agent's read tools use an explicit public source view, and candidate code
 runs in a separate sandbox. This README is operator-facing and is excluded from
-that view. `research_agent/interface.md` supplies the agent's public guide.
+that view. `research_agent/prompt.md` contains the agent's full interface contract.
+The agent starts with an empty `merge(base_model, task_vectors, lora_adapters)`
+function in `research_agent/candidate.py`. Public source files are exposed in full
+through the `PUBLIC_FILES` allowlist in `research_agent/repository.py`; the result
+table and selected paper Markdown are also readable. Private loading, scoring
+and reference alignment remain in `private_eval/`.
+
+The sandbox receives the model inputs and public code, while the trusted GPU worker
+retains datasets, original classification heads and accuracy computation. Only the
+backbone weights identified by task-vector keys are transferred from the returned
+model to the evaluator.
 
 The three-task benchmark uses fixed released settings or explicit overrides.
 Its scores are not directly equivalent to the original six-task, tuned results.

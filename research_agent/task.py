@@ -6,12 +6,14 @@ import json
 import math
 import uuid
 from pathlib import Path
+from time import monotonic
 
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
 from inspect_ai.solver import Generate, TaskState, generate, solver, use_tools
 from inspect_ai.tool import tool
 from inspect_ai.model import GenerateConfig
+from inspect_ai.util import sample_limits
 from research_agent.repository import public_repository, reference_files
 from private_eval.scoring import load_reference
 
@@ -52,16 +54,27 @@ def read_slice(files, name, start, lines, max_chars=20000):
 
 
 @task
-def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget: int = 30000):
+def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget: int = 30000,
+             time_limit: int = 3600):
     # Run helpers and cleanup
 
     def budget_status():
         used = active_state.token_usage if active_state is not None else 0
         limit = active_state.token_limit if active_state is not None else token_budget
+        try:
+            clock = sample_limits().time
+            seconds_limit, seconds_used, seconds_remaining = clock.limit, clock.usage, clock.remaining
+        except RuntimeError:
+            # No running Inspect sample during direct local tool tests/setup.
+            seconds_limit = time_limit
+            seconds_used = max(0, monotonic() - started_at) if started_at is not None else 0
+            seconds_remaining = max(0, seconds_limit - seconds_used)
         return {"token_limit": limit, "tokens_used": used,
                 "tokens_remaining": max(0, limit - used) if limit is not None else None,
                 "evaluation_limit": max_evaluations, "evaluations_used": attempts,
                 "evaluations_remaining": max(0, max_evaluations - attempts),
+                "time_limit_seconds": seconds_limit, "time_used_seconds": seconds_used,
+                "time_remaining_seconds": seconds_remaining,
                 "submitted": submitted}
 
     def freeze(code, report, explanation, selection):
@@ -75,7 +88,7 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
              "algorithm_sha256": hashlib.sha256((explanation.strip() + "\n").encode()).hexdigest()}, indent=2))
 
     async def finalize(state: TaskState):
-        # Inspect task cleanup also runs on token/message-limit termination.
+        # Inspect task cleanup also runs on token/message/time-limit termination.
         async with lock:
             if submitted:
                 return
@@ -93,7 +106,7 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
     @tool
     def get_budget():
         async def execute() -> str:
-            """Report cumulative token usage and remaining validation attempts.
+            """Report token usage, remaining evaluation attempts and remaining wall-clock seconds.
 
             Usage covers completed calls; future context and output also consume
             tokens. Checking does not consume an evaluation.
@@ -164,6 +177,9 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
             async with lock:
                 if submitted or attempts >= max_evaluations:
                     return "No experiments available; submit an evaluated candidate"
+                remaining = budget_status()["time_remaining_seconds"]
+                if remaining is not None and remaining <= 0:
+                    return "The agent's time limit has been reached; no new evaluation can start"
                 if split not in {"val", "test"}:
                     return "split must be val or test"
                 try:
@@ -234,13 +250,14 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
     @solver
     def track_budget():
         async def solve(state: TaskState, generate: Generate) -> TaskState:
-            nonlocal active_state
+            nonlocal active_state, started_at
             active_state = state
+            started_at = monotonic()
             return state
         return solve
 
     # Run setup and shared state
-    if max_evaluations < 1 or token_budget < 1:
+    if max_evaluations < 1 or token_budget < 1 or time_limit < 1:
         raise ValueError("Budgets must be positive")
     
     folder = Path(run_dir) / uuid.uuid4().hex
@@ -261,12 +278,14 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
     lock = asyncio.Lock()
     successful = {}
     active_state = None
+    started_at = None
 
     # Prompt construction
 
     prompt = ((ROOT / "prompt.md").read_text()
               .replace("{{max_evaluations}}", str(max_evaluations))
               .replace("{{token_budget}}", str(token_budget))
+              .replace("{{time_limit}}", str(time_limit))
               .replace("{{initial_candidate}}", source))
     (folder / "prompt.txt").write_text(prompt)
     # Solver sequence
@@ -291,5 +310,5 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
         solver=solvers,
         cleanup=finalize,
         config=GenerateConfig(parallel_tool_calls=False),
-        message_limit=60, token_limit=token_budget
+        message_limit=60, token_limit=token_budget, time_limit=time_limit
     )

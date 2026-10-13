@@ -229,3 +229,6 @@ agent-logs/
 research_agent/references/**
 !research_agent/references/convert_paper.sh
 !research_agent/references/README.md
+
+tests
+tests/**

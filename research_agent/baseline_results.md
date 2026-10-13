@@ -17,6 +17,5 @@ The reference algorithm is anonymous; its implementation and settings are privat
 
 100 means parity with the reference; values above 100 are better. Avg is the
 arithmetic mean of the three reference-relative task scores. Values are not capped
-at 100. The table is transcribed from the operator's corrected spreadsheet; displayed
-rounding can differ slightly from calculations using rounded raw accuracies.
-Validation feedback is raw accuracy, since validation reference scores are unavailable.
+at 100. Base model, SNLI adapter, MNLI adapter, and SciTail adapter rows show the
+scores for the corresponding unmerged experts.
