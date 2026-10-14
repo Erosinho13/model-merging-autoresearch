@@ -1,4 +1,3 @@
-"""Private model loading and dataset scoring; original function bodies retained."""
 from copy import deepcopy
 import numpy as np
 import torch

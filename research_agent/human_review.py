@@ -50,7 +50,6 @@ async def request_review(folder, index, limit, code, digest, explanation, eviden
         record.update(status="error", error=str(error))
     finally:
         record["human_wait_seconds"] = timer.human_wait_seconds - waited_before
-        # Cancellation must preserve an honest status and still resume the timer.
         if record["status"] == "pending":
             record["status"] = "cancelled"
         review_path.write_text(json.dumps(record, indent=2))

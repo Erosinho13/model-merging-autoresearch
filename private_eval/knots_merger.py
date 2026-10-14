@@ -78,7 +78,7 @@ class SVDMerger(TaskMerger):
             sV_concat = V
             Vs = list(torch.split(sV_concat, cat_hidden_dim, dim=1))
             for idx, V in enumerate(Vs):
-                V = torch.diag(s) @ V # Simple and safe for all merging methods we use.
+                V = torch.diag(s) @ V
                 s_model = s / s
 
                 s_compositions_dict[idx][key] = s_model.cpu()

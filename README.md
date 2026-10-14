@@ -12,8 +12,6 @@ Modal runs candidate code and a fixed NLP evaluator on remote compute.
   KnOTS-DARE-TIES, CUR-merging (SVD + CUR with TIES), plus the base model and individual task adapters.
 - **Primary reference:** locally tuned KnOTS-TIES, the best measured test Avg
   in this benchmark. Task Arithmetic slightly exceeds it on validation.
-  KnOTS-DARE-TIES remains an additional operator comparison;
-  both variants need not outperform every other baseline.
 - **Research feedback:** reference-relative scores on both validation and test.
   Optional hyperparameter tuning must use validation; extra unseen-dataset
   checks are deferred.
