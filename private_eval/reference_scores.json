@@ -3,5 +3,8 @@
     "reference_accuracy_percent": {"snli": 90.82, "mnli": 88.21, "scitail": 94.17},
     "provenance": "Operator-supplied raw-results table; accuracies rounded to two decimals. Confirmed test split."
   },
-  "val": null
+  "val": {
+    "reference_accuracy_percent": {"snli": 91.19, "mnli": 87.42, "scitail": 96.40},
+    "provenance": "Operator-supplied raw validation-results table; accuracies rounded to two decimals. Reference uses scale 1.0 and topK 40."
+  }
 }

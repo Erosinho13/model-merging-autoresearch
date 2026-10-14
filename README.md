@@ -10,10 +10,11 @@ Modal runs candidate code and a fixed NLP evaluator on remote compute.
 - **Tasks:** SNLI, MNLI and SciTail, scored using classification accuracy.
 - **Baselines:** averaging, Task Arithmetic, TIES, DARE-TIES, KnOTS-TIES and
   KnOTS-DARE-TIES, plus the base model and individual task adapters.
-- **Primary reference:** locally tuned KnOTS-TIES, currently the best measured
-  method in this benchmark. KnOTS-DARE-TIES remains an additional comparison;
+- **Primary reference:** locally tuned KnOTS-TIES, the best measured test Avg
+  in this benchmark. Task Arithmetic slightly exceeds it on validation.
+  KnOTS-DARE-TIES remains an additional operator comparison;
   both variants need not outperform every other baseline.
-- **Research feedback:** test reference-relative scores and raw validation accuracies.
+- **Research feedback:** reference-relative scores on both validation and test.
   Optional hyperparameter tuning must use validation; extra unseen-dataset
   checks are deferred.
 - **Current assessment:** measured performance within the model-merging research
@@ -74,8 +75,8 @@ On test, expected raw accuracies from the measured baselines are approximately:
 | Averaging | 90.92 | 81.90 | 93.98 |
 | Task Arithmetic | 91.28 | 89.17 | 91.67 |
 
-Compare the returned raw validation accuracies with the averaging baseline on
-the same split. This check incurs Modal compute charges. Local orchestration builds
+Compare returned scores with the public baseline table for the same split.
+This check incurs Modal compute charges. Local orchestration builds
 the sandbox image, then a CPU worker caches fixed inputs before requesting a GPU. Later
 attempts reuse those files and image layers. The GPU remains allocated while each
 fresh sandbox reconstructs the model and runs the candidate.
@@ -151,9 +152,9 @@ Inspect the numbered local result files as evaluations finish. Their
 
 The agent can submit any exact source that has completed evaluation successfully.
 Submission saves its code, matching algorithm explanation and report. If no explicit
-submission is made, cleanup selects the best test Avg candidate, or the best raw
-validation Avg if none has test results. The two scales are never mixed. Without
-a successful evaluation, no valid candidate is submitted. Abrupt process termination
+submission is made, cleanup selects the best test Avg candidate, or the best
+validation Avg if none has test results. Results from different splits are ranked
+separately. Without a successful evaluation, no valid candidate is submitted. Abrupt process termination
 can prevent cleanup; previously saved attempt files remain available.
 
 To evaluate the frozen submission directly, replace `<run-id>` with its local folder:
@@ -163,10 +164,11 @@ python -m modal run -m research_agent.modal_runner::main \
   --candidate agent-runs/<run-id>/submission.py --split test
 ```
 
-Test scores are `100 * candidate_accuracy / reference_accuracy` per task, with
+Both splits return `100 * candidate_accuracy / reference_accuracy` per task, with
 Avg their arithmetic mean. The private reference accuracies are configured in
-`private_eval/reference_scores.json`. Validation reports raw accuracies and their
-mean, without reference calibration.
+`private_eval/reference_scores.json`, separately for validation and test.
+Calibration for the requested split is required before evaluation; there is no
+raw-accuracy fallback. Raw accuracies remain in operator reports for auditing.
 
 ## Repository layout
 

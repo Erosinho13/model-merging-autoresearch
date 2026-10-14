@@ -13,8 +13,6 @@ def load_reference(split):
     if split not in {"val", "test"}:
         raise ValueError("split must be val or test")
     reference = json.loads(REFERENCES.read_text()).get(split)
-    if split == "val" and not reference:
-        return None
     if not reference:
         raise ValueError(f"Reference scores for {split} are not configured; supply anonymous-reference accuracies before evaluation")
     values = reference["reference_accuracy_percent"]
@@ -24,11 +22,13 @@ def load_reference(split):
 
 
 def relative_scores(report, reference):
-    """Test: reference-relative percentages. Val: raw accuracy percentages."""
+    """Reference-relative percentages using the requested split's calibration."""
+    if reference is None:
+        raise ValueError("Reference calibration is required; raw-accuracy feedback is disabled")
     accuracies = {task: report["tasks"][task]["accuracy_percent"] for task in TASKS}
     if any(not math.isfinite(v) or not 0 <= v <= 100 for v in accuracies.values()):
         raise ValueError("Invalid candidate accuracies")
-    scores = accuracies.copy() if reference is None else {
+    scores = {
         task: 100 * (accuracies[task] / reference["reference_accuracy_percent"][task])
         for task in TASKS
     }

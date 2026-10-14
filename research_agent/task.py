@@ -255,7 +255,7 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
                     if set(report["scores"]) != {"snli", "mnli", "scitail", "avg"} or not all(math.isfinite(v) for v in report["scores"].values()):
                         raise ValueError("Evaluator returned a nonfinite score")
                     report["split"] = split
-                    report["score_type"] = "reference_relative_percent" if split == "test" else "raw_accuracy_percent"
+                    report["score_type"] = "reference_relative_percent"
                     key = digest + ":" + split
                     successful[key] = {"source": snapshot, "report": report, "explanation": explanation}
                 except Exception as error:

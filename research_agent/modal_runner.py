@@ -125,7 +125,7 @@ def evaluate_candidate(source: str, split: str = 'val', cache_key: str = '', san
     try:
         report = evaluate(source, str(output), execute, split, inputs_dir=folder)
         report['scores'] = relative_scores(report, reference)
-        report['score_type'] = 'reference_relative_percent' if reference else 'raw_accuracy_percent'
+        report['score_type'] = 'reference_relative_percent'
         report.update(metadata)
         (output / 'result.json').write_text(json.dumps(report, indent=2))
         return report

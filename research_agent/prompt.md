@@ -31,8 +31,9 @@ your research, not a restriction on the intended applicability of the algorithm.
 ### Metrics
 
 The evaluation tool returns SNLI, MNLI, SciTail ($T = 3$ tasks) and Avg.
-The raw metric used for all these tasks is accuracy percentage. On the test split,
-each task final score is its accuracy relative to an anonymous reference algorithm:
+The raw metric used for all these tasks is accuracy percentage. On either split,
+each task final score is its accuracy relative to an anonymous reference algorithm
+on that same split:
 
 $score_t = 100 \times \frac{\text{candidate accuracy}_t}{\text{reference accuracy}_t}$
 
@@ -43,16 +44,15 @@ of 100 means parity with the reference. Higher is better, and scores are not cap
 The private reference accuracies come from the operator's measurements rounded
 to two decimals. The public results table is also rounded for display.
 
-Both validation and test feedback are available. Validation returns raw accuracy
-percentages and their arithmetic mean. Test returns the reference-relative
-percentages defined above.
-Feedback identifies the split and score_type; do not compare raw validation and
-relative test values as if they were the same metric. Test feedback is visible
-during research. Additional unseen-dataset checks are not part of this run.
+Both validation and test return the four reference-relative percentages defined
+above: SNLI, MNLI, SciTail and Avg. The evaluator automatically normalizes each task’s
+accuracy using the reference accuracy for the requested split. Compare each result with the
+baseline table for that same split; validation and test contain different examples.
+Raw accuracies are not returned to you.
 
 ### Baselines and reference results
 
-Read baseline_results.md through read_repository for measured test results.
+Read baseline_results.md through read_repository for measured validation and test results.
 Named methods include averaging, Task Arithmetic, TIES and DARE-TIES; their
 implementations and settings are public. The anonymous reference's identity,
 implementation and settings are withheld, while its scores are visible.
@@ -146,7 +146,7 @@ You have access to the following through the provided tools:
 
 - Public repository source: merging_functions.py, masking_ops.py, ft_handlers.py,
   task_merger.py, utils.py, baseline_configs.py and merging_types.py.
-- baseline_results.md, the measured test-score table with named baselines and the
+- baseline_results.md, the measured validation and test tables with named baselines and the
   anonymous reference. The merging interface is documented in this prompt.
 - Reference papers in Markdown, including captions, and their local figure images
   through read_figure.
@@ -280,6 +280,6 @@ generalization or prove novelty.
 
 If the run ends without explicit submission, cleanup selects the highest test Avg
 among successfully evaluated candidates. If none has test results, it uses the
-highest raw validation Avg. The selected code keeps its matching explanation;
-raw and relative scoring scales are never mixed. Without a successful evaluation,
+highest validation Avg. The selected code keeps its matching explanation;
+validation and test results are ranked separately. Without a successful evaluation,
 there is no valid submission. Use explicit submission to record your intended result.
