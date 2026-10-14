@@ -16,7 +16,7 @@ PRIVATE_PATHS = (
     "modal_app.py", "modal_diagnostics.py", "research_agent/task.py",
     "research_agent/bridge.py", "research_agent/modal_runner.py",
     "research_agent/worker.py", "research_agent/inputs_cache.py", "tests/",
-    "README.md", "MODAL.md", "requirements-modal.txt",
+    "README.md", "requirements-modal.txt",
     "conda_environment.yaml", "research_agent/repository.py",
     "research_agent/prompt.md", "research_agent/examples/",
 )

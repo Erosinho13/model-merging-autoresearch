@@ -173,13 +173,20 @@ candidate is allowed; evaluating it consumes an ordinary evaluation attempt.
   for paper/notes.md linking figure.jpeg, use paper/figure.jpeg.
   Viewing images consumes model input tokens; select figures relevant to your research.
 - write_candidate: replace candidate.py and check syntax and the merge signature.
-- get_budget: report token usage, remaining evaluation attempts and remaining
-  wall-clock time in seconds, using the same timer that enforces the run limit.
+- get_budget: report token usage, remaining evaluation and human-review attempts,
+  remaining agent runtime, and accumulated human waiting time.
 - evaluate_candidate(explanation=..., split="val" or "test"): execute the current
   candidate and return four split-specific scores or an error, plus budget status.
   The default split is val.
 - submit_candidate(explanation=...): freeze successfully evaluated code and its
   Markdown explanation. An optional explanation updates the final write-up.
+- human_scorer(explanation=...): request human feedback on the current implemented
+  candidate. Available only when the human-review limit below is greater than zero.
+  The human supplies separate 0–10 innovativeness and logical-reasoning scores,
+  plus optional comments. Use feedback to reconsider your hypothesis or next attempt;
+  explain which suggestions you adopted or why you disagree. Human ratings are
+  subjective feedback, separate from benchmark scores. Declined or cancelled requests
+  also consume a human-review opportunity.
 
 Both reading tools accept start, lines (default 200) and max_chars (default 20000).
 Choose positive limits to fit your remaining budget; there is no fixed upper cap.
@@ -208,8 +215,10 @@ The trusted GPU evaluator has a one-hour timeout.
 
 GPU evaluation limit: {{max_evaluations}}.
 Total token budget for this research run: {{token_budget}}.
+Maximum human-review requests: {{max_human_reviews}}. Zero disables the tool.
 Agent wall-clock time limit: {{time_limit}} seconds (including model calls and
-evaluation waits). This limit is enforced by Inspect for this research run.
+evaluation waits, excluding time waiting for human scoring). The timer resumes
+after each human response.
 
 Tokens accumulate across calls, including input, output and provider-reported
 reasoning tokens. Conversation history consumes input tokens again on later calls.

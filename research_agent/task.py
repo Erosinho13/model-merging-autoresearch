@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from time import monotonic
 
+import anyio
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
 from inspect_ai.event import ErrorEvent, SampleLimitEvent
@@ -17,8 +18,10 @@ from inspect_ai.solver import Generate, TaskState, generate, solver, use_tools
 from inspect_ai.tool import tool, ToolResult
 from inspect_ai.model import ContentImage, ContentText
 from inspect_ai.model import GenerateConfig
-from inspect_ai.util import sample_limits
+from inspect_ai.util import LimitExceededError, sample_limits
 from research_agent.repository import public_repository, reference_files, reference_figures
+from research_agent.runtime import PausableTimer
+from research_agent.human_review import request_review
 from private_eval.scoring import load_reference
 
 ROOT = Path(__file__).resolve().parent
@@ -72,7 +75,7 @@ def read_slice(files, name, start, lines, max_chars=20000):
 
 @task
 def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget: int = 30000,
-             time_limit: int = 3600):
+             time_limit: int = 3600, max_human_reviews: int = 0):
     # Run helpers and cleanup
 
     def budget_status():
@@ -86,12 +89,18 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
             seconds_limit = time_limit
             seconds_used = max(0, monotonic() - started_at) if started_at is not None else 0
             seconds_remaining = max(0, seconds_limit - seconds_used)
+        if max_human_reviews:
+            seconds_limit, seconds_used, seconds_remaining = timer.limit, timer.elapsed, timer.remaining
         return {"token_limit": limit, "tokens_used": used,
                 "tokens_remaining": max(0, limit - used) if limit is not None else None,
                 "evaluation_limit": max_evaluations, "evaluations_used": attempts,
                 "evaluations_remaining": max(0, max_evaluations - attempts),
                 "time_limit_seconds": seconds_limit, "time_used_seconds": seconds_used,
                 "time_remaining_seconds": seconds_remaining,
+                "human_review_limit": max_human_reviews, "human_reviews_used": review_attempts,
+                "human_reviews_remaining": max(0, max_human_reviews - review_attempts),
+                "human_wait_seconds": timer.human_wait_seconds,
+                "waiting_for_human": timer.paused_at is not None,
                 "submitted": submitted}
 
     def freeze(code, report, explanation, selection):
@@ -102,7 +111,10 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
         (folder / "submission.json").write_text(json.dumps(
             {**report, "selection": selection, "candidate_sha256": check_source(code),
              "algorithm_file": "algorithm.md",
-             "algorithm_sha256": hashlib.sha256((explanation.strip() + "\n").encode()).hexdigest()}, indent=2))
+             "algorithm_sha256": hashlib.sha256((explanation.strip() + "\n").encode()).hexdigest(),
+             "human_reviews": [r for r in human_reviews if r["candidate_sha256"] == check_source(code)],
+             "human_review_requests": review_attempts,
+             "human_assisted": any(r["status"] == "accepted" for r in human_reviews)}, indent=2))
 
     async def finalize(state: TaskState):
         # Inspect task cleanup also runs on token/message/time-limit termination.
@@ -123,7 +135,8 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
                 events = transcript().events
             except RuntimeError:
                 events = []  # Direct local tool tests have no Inspect transcript.
-            print(f"[Research run ended] {termination_reason(events)}", flush=True)
+            reason = "time limit exceeded" if timer.expired else termination_reason(events)
+            print(f"[Research run ended] {reason}", flush=True)
 
     # Agent tools
 
@@ -293,7 +306,56 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
                 return "Submission frozen. End with a brief explanation of your method."
         return execute
 
-    # Custom solver
+    @tool
+    def human_scorer():
+        async def execute(explanation: str) -> str:
+            """Ask a human to score the current candidate's innovativeness and reasoning, each 0-10.
+
+            Args:
+                explanation: Markdown describing the method, claimed contribution,
+                    rationale, assumptions, limitations and available evidence.
+            """
+            nonlocal review_attempts
+            async with lock:
+                if submitted or review_attempts >= max_human_reviews:
+                    return "No human reviews available"
+                if timer.remaining <= 0:
+                    return "The agent's time limit has been reached"
+                try:
+                    digest = check_source(source, require_implementation=True)
+                except (ValueError, SyntaxError) as error:
+                    return str(error)
+                if not explanation.strip() or len(explanation.encode()) > 20000:
+                    return "Provide a nonempty Markdown explanation of at most 20 KB"
+                review_attempts += 1
+                evidence = [item["report"] for key, item in successful.items() if key.startswith(digest + ":")]
+                record = await request_review(folder, review_attempts, max_human_reviews,
+                                              source, digest, explanation, evidence, timer)
+                human_reviews.append(record)
+                feedback = {k: record[k] for k in ("review", "candidate_sha256", "status", "scores", "comments", "error") if k in record}
+                return json.dumps(feedback | {"budget": budget_status()})
+        return execute
+
+    # Custom solvers
+
+    @solver
+    def run_agent_with_clock():
+        async def solve(state: TaskState, generate: Generate) -> TaskState:
+            if sample_limits().time.limit is not None:
+                raise ValueError("With human reviews, use -T time_limit=... rather than --time-limit; an external wall-clock limit cannot pause")
+            with anyio.CancelScope() as scope:
+                timer.attach(scope)
+                try:
+                    result = await agent_loop(state, generate)
+                finally:
+                    timer.finish()
+            if scope.cancelled_caught:
+                timer.expired = True
+                transcript().info({"research_stop_reason": "time limit exceeded"})
+                raise LimitExceededError("time", value=timer.elapsed, limit=time_limit,
+                                         message="Agent runtime budget exceeded (human waiting excluded)")
+            return result
+        return solve
 
     @solver
     def track_budget():
@@ -301,12 +363,16 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
             nonlocal active_state, started_at
             active_state = state
             started_at = monotonic()
+            if max_human_reviews:
+                timer.start()
             return state
         return solve
 
     # Run setup and shared state
     if max_evaluations < 1 or token_budget < 1 or time_limit < 1:
         raise ValueError("Budgets must be positive")
+    if max_human_reviews < 0:
+        raise ValueError("max_human_reviews must be nonnegative")
     
     # Inspect changes the working directory during task loading and execution.
     run_root = Path(run_dir).expanduser()
@@ -327,6 +393,9 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
     (folder / "candidate.py").write_text(source)
 
     attempts = 0
+    review_attempts = 0
+    human_reviews = []
+    timer = PausableTimer(time_limit)
     submitted = False
     lock = asyncio.Lock()
     successful = {}
@@ -339,10 +408,12 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
               .replace("{{max_evaluations}}", str(max_evaluations))
               .replace("{{token_budget}}", str(token_budget))
               .replace("{{time_limit}}", str(time_limit))
+              .replace("{{max_human_reviews}}", str(max_human_reviews))
               .replace("{{initial_candidate}}", source))
     (folder / "prompt.txt").write_text(prompt)
     # Solver sequence
 
+    agent_loop = generate(tool_calls="loop")
     solvers = [
         track_budget(),
         use_tools([
@@ -353,8 +424,8 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
             evaluate_candidate(),
             submit_candidate(),
             read_figure(),
-        ]),
-        generate(tool_calls="loop"),
+        ] + ([human_scorer()] if max_human_reviews else [])),
+        run_agent_with_clock() if max_human_reviews else agent_loop,
     ]
 
     # Inspect task assembly
@@ -364,5 +435,6 @@ def research(max_evaluations: int = 3, run_dir: str = "agent-runs", token_budget
         solver=solvers,
         cleanup=finalize,
         config=GenerateConfig(parallel_tool_calls=False),
-        message_limit=60, token_limit=token_budget, time_limit=time_limit
+        message_limit=60, token_limit=token_budget,
+        time_limit=None if max_human_reviews else time_limit
     )

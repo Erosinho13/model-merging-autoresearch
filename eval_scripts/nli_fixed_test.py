@@ -23,6 +23,7 @@ METHODS = {
     "dare_ties": "llama8B_r16_dare_ties",
     "knots_ties": "llama8B_r16_knots_ties",
     "knots_dare_ties": "llama8B_r16_knots_dare_ties",
+    "cur_merging": "llama8B_r16_cur_merging",
 }
 DARE_SEEDS = (420, )
 EVALUATIONS = (*METHODS, "base", *TASKS)
@@ -52,7 +53,7 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
             raise ValueError("Positive scale overrides apply only to merge methods other than average")
         config["task_merge_config"]["scaling_coeffs"] = [scale]
     if top_k is not None:
-        if method not in {"ties", "dare_ties", "knots_ties", "knots_dare_ties"} or not 1 < top_k <= 100:
+        if method not in {"ties", "dare_ties", "knots_ties", "knots_dare_ties", "cur_merging"} or not 1 < top_k <= 100:
             raise ValueError("top-k must be a retention percentage in (1, 100] for TIES/DARE-TIES")
         config["task_merge_config"]["topK"] = top_k
     if dare_pruning_coeffs is not None:
@@ -62,6 +63,10 @@ def fixed_config(method, seed=420, scale=None, top_k=None, dare_pruning_coeffs=N
     # Keep the pruning seed explicit; no validation-based seed selection.
     if config["task_merge_config"].get("dare"):
         config["task_merge_config"]["dare_seed"] = seed
+    # The upstream CUR configuration uses a scalar; our evaluator expects a list.
+    scaling = config["task_merge_config"]["scaling_coeffs"]
+    if isinstance(scaling, (int, float)):
+        config["task_merge_config"]["scaling_coeffs"] = [float(scaling)]
     return config
 
 
@@ -149,8 +154,9 @@ def load_merged(method, raw):
         progress(f"Recovered {task} head: {tuple(heads[task].shape)}")
     merge_config = raw["task_merge_config"]
     aligned = merge_config["representation"] == "svd-vector"
+    gpu_merge = aligned or merge_config["representation"] == "matrix_per_layer"
     # Accelerate the released float64 SVD on CUDA; source models stay on CPU.
-    merge_device = "cuda" if aligned and torch.cuda.is_available() else "cpu"
+    merge_device = "cuda" if gpu_merge and torch.cuda.is_available() else "cpu"
     merger_class = get_merge_handler(merge_config["representation"])
     merger = merger_class(models["bases"], models["new"], LoRAHandler,
                           device=merge_device, merge_config=merge_config)
@@ -165,7 +171,7 @@ def load_merged(method, raw):
         merged = merger.merge(merge_config)
     progress("Merge complete; releasing source models")
     del merger, models
-    if aligned and torch.cuda.is_available():
+    if gpu_merge and torch.cuda.is_available():
         torch.cuda.empty_cache()
     return merged, heads
 

@@ -1,5 +1,5 @@
 """
-Run the KnOTS source on Modal; see MODAL.md for setup.
+Run the baseline source on Modal; see README.md for setup.
 
 Run with:
 
@@ -22,7 +22,7 @@ app = modal.App("lora-merging-research")
 cache = modal.Volume.from_name("lora-merging-hf-cache", create_if_missing=True)
 results = modal.Volume.from_name("lora-merging-results", create_if_missing=True)
 
-# See requirements-modal.txt and MODAL.md for reproduction constraints.
+# See requirements-modal.txt and README.md for runtime and setup details.
 image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install("torch==2.2.2", "torchvision==0.17.2")

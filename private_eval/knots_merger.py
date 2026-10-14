@@ -6,6 +6,7 @@ from tqdm.auto import tqdm
 from task_merger import TaskMerger, VectorOps, VectorMerger
 from utils import get_mask_fn, get_merging_fn
 from masking_ops import masked_merge
+from private_eval.cur_merger import MatrixPerLayerMerger
 
 
 class SVDMerger(TaskMerger):
@@ -199,3 +200,5 @@ def get_merge_handler(rep_type):
         return SVDMerger
     elif rep_type == 'vector':
         return VectorMerger
+    elif rep_type == 'matrix_per_layer':
+        return MatrixPerLayerMerger

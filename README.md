@@ -9,7 +9,7 @@ Modal runs candidate code and a fixed NLP evaluator on remote compute.
 - **Model:** Llama-3-8B with rank-16 LoRA adapters.
 - **Tasks:** SNLI, MNLI and SciTail, scored using classification accuracy.
 - **Baselines:** averaging, Task Arithmetic, TIES, DARE-TIES, KnOTS-TIES and
-  KnOTS-DARE-TIES, plus the base model and individual task adapters.
+  KnOTS-DARE-TIES, CUR-merging (SVD + CUR with TIES), plus the base model and individual task adapters.
 - **Primary reference:** locally tuned KnOTS-TIES, the best measured test Avg
   in this benchmark. Task Arithmetic slightly exceeds it on validation.
   KnOTS-DARE-TIES remains an additional operator comparison;
@@ -25,7 +25,15 @@ Modal runs candidate code and a fixed NLP evaluator on remote compute.
 ## Getting started
 
 Run commands from the repository root with the `eai-tests` environment activated
-and Modal authenticated. See [MODAL.md](MODAL.md) for Hugging Face access and setup.
+and Modal authenticated (`modal token new` if needed).
+Create a Modal secret named `huggingface` with an `HF_TOKEN` that has access to
+`meta-llama/Meta-Llama-3-8B`, including acceptance of its access conditions.
+Hugging Face downloads persist in `lora-merging-hf-cache`; baseline and agent
+evaluation reports persist in `lora-merging-results`.
+
+The GPU smoke check uses L4 and needs no checkpoints or Hugging Face secret.
+The CPU preparation check verifies datasets, tokenizer access and adapter metadata;
+it does not download model weights or establish baseline accuracy.
 
 ```bash
 # Cache model weights on CPU.
@@ -41,6 +49,10 @@ python -m modal run modal_diagnostics.py --prepare
 
 Cloud commands incur compute charges. Evaluation defaults to test if `--split`
 is omitted. Select hyperparameters using validation before final testing.
+Default test baseline outputs are under `/fixed-test` in the results volume;
+validation and hyperparameter runs are under `/hp/<method>/<split>/...`.
+Download either directory with `modal volume get lora-merging-results /hp ./modal-results`
+(replace `/hp` with `/fixed-test` for default test runs).
 
 ## Running and monitoring the research agent
 
@@ -106,13 +118,29 @@ These are the defaults; omit the corresponding `-T` arguments to use them.
 The token limit counts input and output across all model calls, including cached
 input and repeated conversation history; it is not just a generated-output limit.
 `time_limit` is measured in seconds and enforced by Inspect's per-sample timer.
+With human reviews enabled, the runner uses a pausable timer instead, enforcing
+the same runtime budget while excluding human waiting. Use `-T time_limit=...`;
+do not add Inspect's `--time-limit` option in this mode, since its separate wall-clock
+limit cannot pause. Inspect's displayed total duration may include human waiting.
+
+Enable up to two optional human judgements by adding `-T max_human_reviews=2`.
+The default is zero, so unattended runs keep their existing behavior. When the
+agent calls `human_scorer`, answer in the running Inspect terminal's input form:
+give separate 0–10 innovativeness and logical-reasoning scores, and optionally comments.
+The form shows the proposal and paths to its code snapshot and recorded evidence.
+Open those files to review the actual method. The agent receives your ratings and
+comments and can revise its next attempt. No model call or new GPU job runs while
+it waits for this response. The log viewer shows feedback but is not the input form.
+Review requests, including declined/cancelled ones, consume the configured quota.
+Ratings are subjective assistance, separate from the benchmark metric.
 There is one sample per research run. It includes model calls, tool execution and
 evaluation waits. The agent can check the timer through `get_budget`; evaluation
 feedback also includes remaining time, tokens and attempts.
 
 | Limit | Default | Enforced in |
 |---|---:|---|
-| Agent wall-clock runtime | 1 hour | `Task(time_limit=time_limit)` in `research_agent/task.py` |
+| Agent runtime, excluding human waits | 1 hour | Inspect timer normally; pausable runner timer when human reviews are enabled |
+| Human reviews | 0 (disabled) | `max_human_reviews` and `human_scorer` in `research_agent/task.py` |
 | Agent tokens | 30,000 | `Task(token_limit=token_budget)` in `research_agent/task.py` |
 | Messages | 60 | `Task(message_limit=60)` in `research_agent/task.py` |
 | Evaluation attempts, shared across val/test | 3 | `evaluate_candidate` tool in `research_agent/task.py` |
@@ -143,6 +171,7 @@ accessible to the viewer.
 | `agent-runs/<run-id>/` | `prompt.txt`, current `candidate.py`, public repository snapshot, numbered `candidate_001.py`, `algorithm_001.md` and `result_001.json` files |
 | Same run directory, after submission or fallback | `submission.py`, `algorithm.md` and `submission.json`; if no evaluation succeeded, only a submission report explaining that no valid candidate exists |
 | `agent-logs/` | Inspect transcripts, usage, tool activity and errors |
+| `agent-runs/<run-id>/human_review_001.*` | Candidate `.py`, proposal `.md`, and `.json` with review status, scores, comments and human waiting time; matching reviews are included in final submission metadata |
 | Modal volume `lora-merging-results`, under `/agent/<experiment-id>/` | Candidate snapshot, `metadata.json`, `result.json` or `error.json` |
 | Modal volume `lora-candidate-io`, under `/<experiment-id>/` | Per-attempt candidate code, public source and exported tensors; retained for now |
 | Modal volume `lora-research-inputs`, under `/<cache-key>/` | Reusable fixed model inputs under `public/`; private classifier heads and evaluation configuration outside that subdirectory |
