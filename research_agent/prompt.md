@@ -87,11 +87,17 @@ The evaluator controls datasets, preprocessing, trained classification heads and
 scoring. Candidate code cannot access or modify them. Do not introduce extra
 training data, attempt to access private files or credentials, or fabricate results.
 
-The evaluator receives only the backbone weights identified by the task-vector keys.
-Write your final merged weights into those tensors. Changes to LoRA factors, other
-parameters, classifier heads or model architecture are not exported. Preserve the
-exported tensors' original shapes and finite floating-point values. Factor-based
-methods must reconstruct their merged update and apply it to these backbone weights.
+After merge returns a model, the worker copies only the backbone weight tensors
+whose names appear in task_vectors into the evaluation model. Your method must
+therefore write its final merged weights into those tensors in the returned model.
+Each tensor must keep its original shape and contain only finite floating-point values.
+
+You may use or transform the LoRA factors to compute your merge. However, changing
+the factors alone will not change the evaluated model: the worker does not copy
+them. Convert your merged factors into a dense weight update and apply it to the
+exported backbone tensors, accounting for the installed adapter described below.
+Changes to other weights, classifier heads or the model architecture are also
+ignored; evaluation uses the fixed model structure and original task heads.
 
 ## Task details and function interface
 
@@ -166,21 +172,21 @@ candidate is allowed; evaluating it consumes an ordinary evaluation attempt.
 
 ### Tools
 
-- read_repository: list or read public files and the current candidate.
-- read_reference: list or read supplied paper Markdown.
-- read_figure(name=""): list available paper images; supply an exact listed path
+- **read_repository**: list or read public files and the current candidate.
+- **read_reference**: list or read supplied paper Markdown.
+- **read_figure(name="")**: list available paper images; supply an exact listed path
   to view a figure. Markdown image links are relative to the paper's folder:
   for paper/notes.md linking figure.jpeg, use paper/figure.jpeg.
   Viewing images consumes model input tokens; select figures relevant to your research.
-- write_candidate: replace candidate.py and check syntax and the merge signature.
-- get_budget: report token usage, remaining evaluation and human-review attempts,
+- **write_candidate**: replace candidate.py and check syntax and the merge signature.
+- **get_budget: report token usage, remaining evaluation and human-review attempts,
   remaining agent runtime, and accumulated human waiting time.
-- evaluate_candidate(explanation=..., split="val" or "test"): execute the current
+- **evaluate_candidate(explanation=..., split="val" or "test")**: execute the current
   candidate and return four split-specific scores or an error, plus budget status.
   The default split is val.
-- submit_candidate(explanation=...): freeze successfully evaluated code and its
+- **submit_candidate(explanation=...)**: freeze successfully evaluated code and its
   Markdown explanation. An optional explanation updates the final write-up.
-- human_scorer(explanation=...): request human feedback on the current implemented
+- **human_scorer(explanation=...)**: request human feedback on the current implemented
   candidate. Available only when the human-review limit below is greater than zero.
   The human supplies separate 0–10 innovativeness and logical-reasoning scores,
   plus optional comments. Use feedback to reconsider your hypothesis or next attempt;

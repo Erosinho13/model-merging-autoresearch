@@ -1,6 +1,6 @@
 # Baseline results relative to the reference algorithm
 
-These are the operator's supplied results, transcribed to two decimals.
+These are the operator's supplied results.
 The reference algorithm is anonymous; its implementation and settings are private.
 
 ## Test split

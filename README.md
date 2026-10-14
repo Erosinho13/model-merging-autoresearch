@@ -4,154 +4,122 @@ This repository evaluates whether an existing LLM agent can develop and test
 new methods for merging LoRA-finetuned models. Inspect manages the research loop;
 Modal runs candidate code and a fixed NLP evaluator on remote compute.
 
-## Current benchmark
+## Benchmark
 
 - **Model:** Llama-3-8B with rank-16 LoRA adapters.
 - **Tasks:** SNLI, MNLI and SciTail, scored using classification accuracy.
-- **Baselines:** averaging, Task Arithmetic, TIES, DARE-TIES, KnOTS-TIES and
-  KnOTS-DARE-TIES, CUR-merging (SVD + CUR with TIES), plus the base model and individual task adapters.
-- **Primary reference:** locally tuned KnOTS-TIES, the best measured test Avg
-  in this benchmark. Task Arithmetic slightly exceeds it on validation.
-- **Research feedback:** reference-relative scores on both validation and test.
-  Optional hyperparameter tuning must use validation; extra unseen-dataset
-  checks are deferred.
-- **Current assessment:** measured performance within the model-merging research
-  scope. Algorithmic novelty is not currently scored.
-- **Status:** baseline evaluation and the agent interface are implemented;
-  the revised full-size candidate path still needs remote integration validation.
+- **Baselines:** averaging, Task Arithmetic, TIES, DARE-TIES, KnOTS-TIES, KnOTS-DARE-TIES, CUR-merging (SVD + CUR with TIES), plus the base model and individual task adapters.
+- **Primary reference:** KnOTS-TIES, the best measured test Avg in this benchmark.
+- **Research feedback:** candidate scores relative to an anonymous reference on validation and test, supplied baseline results, and optional human feedback.
+- **Assessment:** performance is scored automatically. Optional human reviews provide separate ratings for innovativeness and logical soundness.
 
 ## Getting started
 
-Run commands from the repository root with the `eai-tests` environment activated
-and Modal authenticated (`modal token new` if needed).
-Create a Modal secret named `huggingface` with an `HF_TOKEN` that has access to
-`meta-llama/Meta-Llama-3-8B`, including acceptance of its access conditions.
-Hugging Face downloads persist in `lora-merging-hf-cache`; baseline and agent
-evaluation reports persist in `lora-merging-results`.
+### Local environment
 
-The GPU smoke check uses L4 and needs no checkpoints or Hugging Face secret.
-The CPU preparation check verifies datasets, tokenizer access and adapter metadata;
-it does not download model weights or establish baseline accuracy.
+Run from the repository root:
+
+```bash
+conda env create --file conda_environment.yaml
+conda activate lora-mma
+```
+
+`requirements-modal.txt` supplies the remote evaluator's
+dependencies, which Modal installs automatically.
+
+### Modal and Hugging Face access
+
+Create a [Modal account](https://modal.com) and authenticate the local CLI:
+
+```bash
+python -m modal token new
+```
+
+This opens a browser login and stores Modal credentials locally.
+See the [Modal setup guide](https://modal.com/docs/guide).
+
+On Hugging Face, obtain access to
+[`meta-llama/Meta-Llama-3-8B`](https://huggingface.co/meta-llama/Meta-Llama-3-8B)
+and create a read token that can access it. In the Modal dashboard, create a
+secret named **`huggingface`**, containing a field named **`HF_TOKEN`** with that token.
+
+Then, you can run the following commands:
 
 ```bash
 # Cache model weights on CPU.
 python -m modal run modal_app.py --download
 
-# Evaluate a baseline on validation.
-python -m modal run modal_app.py --method task_arithmetic --split val
-
-# Optional GPU smoke check or CPU dataset/access check.
-python -m modal run modal_diagnostics.py
+# Download and check datasets, tokenizer access and adapter metadata on CPU.
 python -m modal run modal_diagnostics.py --prepare
+
+# Evaluate a baseline
+python -m modal run modal_app.py --method task_arithmetic --split [val|test]
+
+# Optional GPU check.
+python -m modal run modal_diagnostics.py
 ```
 
 Cloud commands incur compute charges. Evaluation defaults to test if `--split`
-is omitted. Select hyperparameters using validation before final testing.
-Default test baseline outputs are under `/fixed-test` in the results volume;
-validation and hyperparameter runs are under `/hp/<method>/<split>/...`.
-Download either directory with `modal volume get lora-merging-results /hp ./modal-results`
-(replace `/hp` with `/fixed-test` for default test runs).
+is omitted.
 
 ## Running and monitoring the research agent
 
+### Agent tools
+
+| Tool | Purpose |
+|---|---|
+| `read_repository` | Read public repository files and the current candidate code. |
+| `read_reference` | Read the supplied papers in Markdown. |
+| `read_figure` | View figures from the supplied papers. |
+| `write_candidate` | Replace the candidate code, checking its syntax and fixed function signature. |
+| `evaluate_candidate` | Run the candidate on validation or test and return three relative task scores and their average. |
+| `get_budget` | Check remaining tokens, time, evaluations and human reviews. |
+| `human_scorer` | Ask for human ratings of innovativeness and logical soundness, with optional comments. Available when `max_human_reviews > 0`; waiting pauses the timer. |
+| `submit_candidate` | Submit a successfully evaluated candidate and its Markdown explanation. |
+
 Place selected paper Markdown in `research_agent/references/` or its paper
 subfolders. See [reference preparation](research_agent/references/README.md)
-for PDF conversion.
+for PDF conversion. Proposed references are:
 
-Before the first agent run, check the full candidate pipeline with averaging:
+- Task Arithmetic: [Editing Models with Task Arithmetic](https://arxiv.org/abs/2212.04089).
+- TIES: [TIES-Merging: Resolving Interference When Merging Models](https://arxiv.org/abs/2306.01708).
+- DARE: [Language Models are Super Mario: Absorbing Abilities from Homologous Models as a Free Lunch](https://arxiv.org/abs/2311.03099).
+- Fisher merging: [Merging Models with Fisher-Weighted Averaging](https://arxiv.org/abs/2111.09832).
+- RegMean: [Dataless Knowledge Fusion by Merging Weights of Language Models](https://arxiv.org/abs/2212.09849).
+- TALL-masks / Consensus Merging: [Localizing Task Information for Improved Model Merging and Compression](https://arxiv.org/abs/2405.07813).
+- [Knowledge is a Region in Weight Space for Fine-tuned Language Models](https://aclanthology.org/2023.findings-emnlp.95/).
+
+For OpenAI agents, create an API key in your [API account](https://platform.openai.com/api-keys)
+and ensure the account has billing enabled and access to your chosen model. Set
+the key in the terminal that will launch Inspect:
 
 ```bash
-python -m modal run -m research_agent.modal_runner::main \
-  --candidate research_agent/examples/average.py --split val
+export OPENAI_API_KEY="your_api_key"
 ```
 
-To verify cache reuse, run averaging followed by Task Arithmetic sequentially:
-
-```bash
-python -m modal run -m research_agent.modal_runner::main --cache-check --split test
-```
-
-The second preparation must report `cache_hit=True`, with the same input-cache key
-and sandbox image ID; otherwise the check stops before its GPU evaluation.
-Separate reports, candidate snapshots and timing summaries are saved under
-`cache-checks/<run-id>/`. Compare preparation time separately from evaluation
-time: both candidates still load the cached model and evaluate the full datasets.
-If the input cache already exists, both preparations can be cache hits.
-Task Arithmetic uses the current coefficient in `baseline_configs.py` (0.5).
-On test, expected raw accuracies from the measured baselines are approximately:
-
-| Candidate | SNLI | MNLI | SciTail |
-|---|---:|---:|---:|
-| Averaging | 90.92 | 81.90 | 93.98 |
-| Task Arithmetic | 91.28 | 89.17 | 91.67 |
-
-Compare returned scores with the public baseline table for the same split.
-This check incurs Modal compute charges. Local orchestration builds
-the sandbox image, then a CPU worker caches fixed inputs before requesting a GPU. Later
-attempts reuse those files and image layers. The GPU remains allocated while each
-fresh sandbox reconstructs the model and runs the candidate.
-
-Fixed inputs are stored in `lora-research-inputs`. The cache key includes checkpoint
-revisions and the source/runtime settings used to prepare them. Changed inputs
-invalidate the cache automatically; an incomplete cache is rebuilt. Candidate
-sandboxes receive only the public input subdirectory through a read-only mount.
-Classification heads and evaluation settings stay in the private cache directory.
-Library installation is cached in Modal image layers; changes to the worker script
-rebuild its file layer while unchanged dependency layers can be reused.
-
-Set your provider API credentials locally and use an API model identifier supported
-by your provider. A Codex model label is not necessarily an API model identifier;
-model API charges are separate from Modal charges.
+The example below uses the API model identifier used in this project's runs.
+To use another provider/model, install the provider's SDK, set its documented
+credentials and change `--model`.
 
 ```bash
 python -m inspect_ai eval research_agent/task.py \
-  --model <provider/model> \
+  --model openai/gpt-6-astra \
+  --reasoning-effort high \
   -T max_evaluations=3 \
-  -T token_budget=30000 \
+  -T token_budget=1000000 \
   -T time_limit=3600 \
   --log-dir agent-logs
 ```
 
-These are the defaults; omit the corresponding `-T` arguments to use them.
-The token limit counts input and output across all model calls, including cached
-input and repeated conversation history; it is not just a generated-output limit.
-`time_limit` is measured in seconds and enforced by Inspect's per-sample timer.
-With human reviews enabled, the runner uses a pausable timer instead, enforcing
-the same runtime budget while excluding human waiting. Use `-T time_limit=...`;
-do not add Inspect's `--time-limit` option in this mode, since its separate wall-clock
-limit cannot pause. Inspect's displayed total duration may include human waiting.
-
-Enable up to two optional human judgements by adding `-T max_human_reviews=2`.
+This example allows one million tokens, three evaluations (either on validation or test), and 1h total time.
+Enable the agent to request `n` human judgments by adding `-T max_human_reviews=n`.
 The default is zero, so unattended runs keep their existing behavior. When the
 agent calls `human_scorer`, answer in the running Inspect terminal's input form:
 give separate 0–10 innovativeness and logical-reasoning scores, and optionally comments.
 The form shows the proposal and paths to its code snapshot and recorded evidence.
-Open those files to review the actual method. The agent receives your ratings and
-comments and can revise its next attempt. No model call or new GPU job runs while
-it waits for this response. The log viewer shows feedback but is not the input form.
-Review requests, including declined/cancelled ones, consume the configured quota.
-Ratings are subjective assistance, separate from the benchmark metric.
-There is one sample per research run. It includes model calls, tool execution and
-evaluation waits. The agent can check the timer through `get_budget`; evaluation
-feedback also includes remaining time, tokens and attempts.
+During human review, the timer is paused so it does not count against the agent's total available time.
 
-| Limit | Default | Enforced in |
-|---|---:|---|
-| Agent runtime, excluding human waits | 1 hour | Inspect timer normally; pausable runner timer when human reviews are enabled |
-| Human reviews | 0 (disabled) | `max_human_reviews` and `human_scorer` in `research_agent/task.py` |
-| Agent tokens | 30,000 | `Task(token_limit=token_budget)` in `research_agent/task.py` |
-| Messages | 60 | `Task(message_limit=60)` in `research_agent/task.py` |
-| Evaluation attempts, shared across val/test | 3 | `evaluate_candidate` tool in `research_agent/task.py` |
-| Candidate sandbox execution | 10 minutes | `timeout=600` in `research_agent/modal_runner.py` |
-| CPU input preparation | 1 hour | `prepare_inputs` in `research_agent/modal_runner.py` |
-| Each remote evaluation | 1 hour | `timeout=3600` in `research_agent/modal_runner.py` |
-
-The agent runtime starts when Inspect begins the sample. Individual Modal timeouts
-are separate limits. Stopping or timing out the local agent does not guarantee
-cancellation of an already-running Modal evaluation; monitor it in the Modal
-dashboard, where you can stop it if needed. These limits do not impose a dollar cap.
-
-Keep the evaluation terminal open for progress. In another terminal, activate the
+In another terminal, you can activate the
 same environment, run from the repository root, and open the transcript viewer:
 
 ```bash
@@ -160,60 +128,11 @@ inspect view --log-dir agent-logs
 
 Open the URL printed by Inspect and select the run to inspect messages, tool calls,
 feedback and usage. The Modal dashboard shows remote job status and worker output.
-For viewers on another machine, add `--log-shared 10` to the evaluation command to
-sync live events to the log directory every ten seconds; that directory must be
-accessible to the viewer.
 
-| Results location | Contents |
-|---|---|
-| `agent-runs/<run-id>/` | `prompt.txt`, current `candidate.py`, public repository snapshot, numbered `candidate_001.py`, `algorithm_001.md` and `result_001.json` files |
-| Same run directory, after submission or fallback | `submission.py`, `algorithm.md` and `submission.json`; if no evaluation succeeded, only a submission report explaining that no valid candidate exists |
-| `agent-logs/` | Inspect transcripts, usage, tool activity and errors |
-| `agent-runs/<run-id>/human_review_001.*` | Candidate `.py`, proposal `.md`, and `.json` with review status, scores, comments and human waiting time; matching reviews are included in final submission metadata |
-| Modal volume `lora-merging-results`, under `/agent/<experiment-id>/` | Candidate snapshot, `metadata.json`, `result.json` or `error.json` |
-| Modal volume `lora-candidate-io`, under `/<experiment-id>/` | Per-attempt candidate code, public source and exported tensors; retained for now |
-| Modal volume `lora-research-inputs`, under `/<cache-key>/` | Reusable fixed model inputs under `public/`; private classifier heads and evaluation configuration outside that subdirectory |
+Inspect transcripts are saved in `agent-logs`; candidate code, evaluation results and final submissions are saved in `agent-runs`.
 
-Inspect the numbered local result files as evaluations finish. Their
-`experiment_id` links successful local reports to the corresponding remote results.
-
-The agent can submit any exact source that has completed evaluation successfully.
-Submission saves its code, matching algorithm explanation and report. If no explicit
-submission is made, cleanup selects the best test Avg candidate, or the best
-validation Avg if none has test results. Results from different splits are ranked
-separately. Without a successful evaluation, no valid candidate is submitted. Abrupt process termination
-can prevent cleanup; previously saved attempt files remain available.
-
-To evaluate the frozen submission directly, replace `<run-id>` with its local folder:
-
-```bash
-python -m modal run -m research_agent.modal_runner::main \
-  --candidate agent-runs/<run-id>/submission.py --split test
-```
-
-Both splits return `100 * candidate_accuracy / reference_accuracy` per task, with
-Avg their arithmetic mean. The private reference accuracies are configured in
-`private_eval/reference_scores.json`, separately for validation and test.
-Calibration for the requested split is required before evaluation; there is no
-raw-accuracy fallback. Raw accuracies remain in operator reports for auditing.
-
-## Repository layout
-
-| Location | Purpose |
-|---|---|
-| `modal_app.py` | Checkpoint setup, cache checks and baseline evaluation |
-| `modal_diagnostics.py` | Optional GPU and dataset diagnostics |
-| `eval_scripts/nli_fixed_test.py` | Fixed NLP evaluation pipeline |
-| `baseline_configs.py` | Public settings used by averaging, TA, TIES and DARE-TIES |
-| `configs/` | Private model/dataset setup and reference-method settings |
-| `dataset/` | Private dataset loaders and preprocessing |
-| `private_eval/` | Private model loading, scoring and reference alignment |
-| `task_merger.py`, `merging_functions.py`, `masking_ops.py`, `ft_handlers.py` | Merging implementations and parameter handling |
-| `utils.py` | Public merging dispatch and seed utilities |
-| `research_agent/` | Preliminary Inspect tools, candidate execution and references |
-| `research_agent/inputs_cache.py` | Trusted fixed-input serialization, cache validation and invalidation |
-
-Baseline JSON reports are saved in the Modal volume `lora-merging-results`.
+For information about the research requirements, check the [prompt.md](research_agent/prompt.md) file, which contains the instructions submitted to the agent.
+Placeholders enclosed in double curly braces, such as `{{token_budget}}`, are automatically replaced with the run's argument values; `{{initial_candidate}}` is replaced with the initial code from `research_agent/candidate.py`.
 
 ## Evaluation integrity
 
@@ -236,6 +155,56 @@ model to the evaluator.
 
 The three-task benchmark uses fixed released settings or explicit overrides.
 Its scores are not directly equivalent to the original six-task, tuned results.
+
+## What runs where
+
+| Location | Work performed |
+|---|---|
+| Your computer | Inspect runs the agent loop, sends requests to the LLM provider, exposes tools, collects human feedback and saves the conversation and candidate snapshots. |
+| LLM provider | The research model reads the supplied material and proposes code. Requests are made using your local provider API key. |
+| Modal CPU functions | Download checkpoints and prepare reusable model inputs. The optional dataset preparation check also downloads and checks the datasets. |
+| Modal CPU sandbox | Executes each candidate merging function with eight CPUs, 96 GiB RAM and a ten-minute timeout. It has public code and read-only model inputs, without datasets, grading code, credentials or network access. |
+| Modal GPU function | Loads the exported backbone weights and evaluates SNLI, MNLI and SciTail with their original classification heads. Both baseline and candidate evaluation use an A100-40GB by default. |
+
+### Baseline methods and settings
+
+Supported `--method` values are `average`, `task_arithmetic`, `ties`, `dare_ties`,
+`knots_ties`, `knots_dare_ties`, `cur_merging`, `base`, `snli`, `mnli` and `scitail`.
+The last four evaluate an unmerged backbone or task adapter with the same evaluator.
+
+The (non-normalized) accuracy results for each method, on the validation and test sets, are shown below.
+
+#### Test set
+
+| Method | SNLI | MNLI | SciTail | Avg |
+|---|---:|---:|---:|---:|
+| base | 41.71 | 34.60 | 60.72 | 45.68 |
+| snli | 92.50 | 68.50 | 81.42 | 80.81 |
+| mnli | 88.79 | 90.45 | 85.70 | 88.31 |
+| scitail | 50.98 | 47.08 | 96.52 | 64.86 |
+| avg | 90.92 | 81.90 | 93.98 | 88.93 |
+| task arithmetic | 91.28 | 89.17 | 91.67 | 90.71 |
+| TIES | 91.27 | 89.57 | 90.97 | 90.60 |
+| DARE-TIES | 91.06 | 83.02 | 93.79 | 89.29 |
+| **KnOTS-TIES** | 90.82 | 88.21 | 94.17 | **91.07** |
+| KnOTS-DARE-TIES | 90.29 | 82.72 | 93.93 | 88.98 |
+| CUR-merging-TIES | 91.54 | 89.94 | 86.92 | 89.47 |
+
+#### Validation set
+
+| Method | SNLI | MNLI | SciTail | Avg |
+|---|---:|---:|---:|---:|
+| base | 41.59 | 36.78 | 60.89 | 46.42 |
+| snli | 92.89 | 69.84 | 80.37 | 81.03 |
+| mnli | 89.43 | 89.51 | 88.96 | 89.30 |
+| scitail | 50.46 | 48.85 | 97.62 | 65.64 |
+| avg | 91.38 | 81.76 | 94.71 | 89.28 |
+| task arithmetic | 91.71 | 88.13 | 95.09 | 91.64 |
+| TIES | 91.71 | 88.23 | 94.63 | 91.52 |
+| DARE-TIES | 91.65 | 82.78 | 94.86 | 89.76 |
+| **KnOTS-TIES** | 91.19 | 87.42 | 96.40 | **91.67** |
+| KnOTS-DARE-TIES | 90.66 | 82.73 | 94.79 | 89.39 |
+| CUR-merging-TIES | 92.15 | 88.69 | 90.41 | 90.42 |
 
 ## Attribution
 
