@@ -1,4 +1,4 @@
-# AI research-agent evaluation: LoRA model merging
+<img width="1672" height="941" alt="model_merging_autoresearch" src="https://github.com/user-attachments/assets/74cd70a4-4173-40eb-8518-6be962029425" />
 
 This repository evaluates whether an existing LLM agent can develop and test
 new methods for merging LoRA-finetuned models. Inspect manages the research loop;
